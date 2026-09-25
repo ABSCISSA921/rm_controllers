@@ -33,11 +33,37 @@ bool ActiveSuspensionController::init(hardware_interface::RobotHW* robot_hw, ros
       return false;
     }
   }
+  if (!controller_nh.hasParam("imu_name"))
+    has_imu_ = false;
+  if (has_imu_)
+  {
+    imu_name_ = getParam(controller_nh, "imu_name", static_cast<std::string>("base_imu"));
+    hardware_interface::ImuSensorInterface* imu_sensor_interface =
+        robot_hw->get<hardware_interface::ImuSensorInterface>();
+    imu_sensor_handle_ = imu_sensor_interface->getHandle(imu_name_);
+  }
   return true;
 }
 void ActiveSuspensionController::moveJoint(const ros::Time& time, const ros::Duration& period)
 {
   OmniController::moveJoint(time, period);
+  if (has_imu_)
+  {
+    odom2base_q.setValue(imu_sensor_handle_.getOrientation()[0], imu_sensor_handle_.getOrientation()[1],
+                  imu_sensor_handle_.getOrientation()[2], imu_sensor_handle_.getOrientation()[3]);
+    odom2base.setRotation(odom2base_q);
+    odom2base.setOrigin(tf2::Vector3(0, 0, 0));
+    tf2::Matrix3x3(odom2base.getRotation()).getRPY(base_roll_, base_pitch_, base_yaw_);
+    base_roll_rate_ = imu_sensor_handle_.getAngularVelocity()[0];
+    base_pitch_rate_ = imu_sensor_handle_.getAngularVelocity()[1];
+    base_yaw_rate_ = imu_sensor_handle_.getAngularVelocity()[2];
+
+    if (base_pitch_rate_ < -0.5 || base_pitch_ < -0.5)
+    {
+      current_state_ = State::UP;
+    }
+  }
+
   switch (current_state_)
   {
     case State::DOWN:

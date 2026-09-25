@@ -37,6 +37,9 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
+#include <limits>
 #include <controller_interface/multi_interface_controller.h>
 #include <hardware_interface/joint_command_interface.h>
 #include <rm_common/hardware_interface/robot_state_interface.h>
@@ -47,7 +50,6 @@
 #include <geometry_msgs/TwistStamped.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <nav_msgs/Odometry.h>
-#include <rm_msgs/ChassisActiveSusCmd.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <rm_chassis_controllers/PowerLimitConfig.h>
 
@@ -57,7 +59,6 @@ struct Command
 {
   geometry_msgs::Twist cmd_vel_;
   rm_msgs::ChassisCmd cmd_chassis_;
-  rm_msgs::ChassisActiveSusCmd cmd_active_sus_;
   ros::Time stamp_;
 };
 template <typename... T>
@@ -146,6 +147,10 @@ protected:
   void outsideOdomCallback(const nav_msgs::Odometry::ConstPtr& msg);
   void powerLimitReconfigCB(rm_chassis_controllers::PowerLimitConfig& config, uint32_t level);
 
+  // Read-only turn recording; never consumed by the control calculation.
+  std::atomic<bool> turn_debug_enabled_{false};
+  bool turn_debug_capture_{false};
+  std::array<double, 10> turn_command_sample_{};
   rm_control::RobotStateHandle robot_state_handle_{};
   hardware_interface::EffortJointInterface* effort_joint_interface_{};
   std::vector<hardware_interface::JointHandle> joint_handles_{};

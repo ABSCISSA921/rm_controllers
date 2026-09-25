@@ -5,6 +5,7 @@
 #include "rm_chassis_controllers/chassis_base.h"
 #include "rm_chassis_controllers/omni.h"
 #include <effort_controllers/joint_position_controller.h>
+#include <hardware_interface/imu_sensor_interface.h>
 #include <rm_msgs/ChassisActiveSusCmd.h>
 #include <std_msgs/Bool.h>
 #include <rm_common/ros_utilities.h>
@@ -35,6 +36,8 @@ private:
   std::vector<hardware_interface::JointHandle> active_suspension_joint_handles_{};
 
   ros::Subscriber active_suspension_sub_;
+  hardware_interface::ImuSensorHandle imu_sensor_handle_;
+
   double current_pos_{ 0. };
   double target_pos_{ 0. };
   double feedforward_offset{ 0. };
@@ -45,8 +48,13 @@ private:
   double shrink_coff_k_{ 0. };
   double feedforward_effect_time_{ 0. };
   double static_effort{ 0. };
+  double base_roll_{},base_pitch_{},base_yaw_{}, base_roll_rate_{},base_pitch_rate_{},base_yaw_rate_{};
+  bool has_imu_{};
+  std::string imu_name_{};
 
   ros::Time feedforward_timer;
+  tf2::Quaternion odom2base_q;
+  tf2::Transform odom2base;
   State current_state_{ State::DOWN };
   State last_state_{ State::DOWN };
 };

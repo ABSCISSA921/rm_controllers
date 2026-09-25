@@ -19,22 +19,17 @@ class BipedalController;
 class ModeBase
 {
 public:
-  explicit ModeBase(BipedalControllerInterface* controller_) : controller(controller_)
-  {
-  }
-  virtual void execute(const ros::Time& time, const ros::Duration& period) = 0;
-  virtual const char* name() const = 0;
+  explicit ModeBase(BipedalControllerInterface *controller_) : controller(controller_) {}
+  virtual void execute(const ros::Time &time, const ros::Duration &period) = 0;
+  virtual const char *name() const = 0;
   virtual ~ModeBase() = default;
-  void updateUnstick(const bool& left_unstick, const bool& right_unstick);
+  void updateUnstick(const bool &left_unstick, const bool &right_unstick);
 
-  inline bool getUnstick()
-  {
-    return (left_unstick_ && right_unstick_);
-  }
+  inline bool getUnstick() { return (left_unstick_ && right_unstick_); }
 
 protected:
-  bool left_unstick_{ false }, right_unstick_{ false };
-  BipedalControllerInterface* controller{ nullptr };
+  bool left_unstick_{false}, right_unstick_{false};
+  BipedalControllerInterface *controller{nullptr};
 };
 
-}  // namespace rm_chassis_controllers
+} // namespace rm_chassis_controllers

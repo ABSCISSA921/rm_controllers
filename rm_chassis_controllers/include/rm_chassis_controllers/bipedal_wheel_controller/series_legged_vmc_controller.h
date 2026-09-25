@@ -12,7 +12,11 @@
 #include <rm_common/hardware_interface/robot_state_interface.h>
 #include <rm_common/ros_utilities.h>
 #include <std_msgs/Float64MultiArray.h>
-#include <rm_common/DebugDataPublisher.h>
+
+#include "bipedal_wheel_controller/vmc/leg_params.h"
+#include "bipedal_wheel_controller/vmc/leg_conv.h"
+#include "bipedal_wheel_controller/vmc/leg_pos.h"
+#include "bipedal_wheel_controller/vmc/leg_spd.h"
 
 #include "bipedal_wheel_controller/vmc/VMC.h"
 
@@ -68,7 +72,6 @@ private:
 
   ros::Publisher statePublisher_, jointCmdStatePublisher_;
   ros::Subscriber cmdLegLengthSubscriber_, cmdLegAngleSubscriber_;
-  std::shared_ptr<DebugDataPublisher> debugPub_;
 };
 
 }  // namespace rm_chassis_controllers

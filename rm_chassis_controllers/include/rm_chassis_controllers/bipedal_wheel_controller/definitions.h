@@ -6,33 +6,120 @@
 
 #include "bipedal_wheel_controller/vmc/VMC.h"
 #include <array>
+#include <string>
+#include <Eigen/Core>
+#include <geometry_msgs/Vector3.h>
 #include <utility>
 
 namespace rm_chassis_controllers
 {
-constexpr static const int STATE_DIM = 6;
-constexpr static const int CONTROL_DIM = 2;
 
+namespace lqr10
+{
+using State10 = Eigen::Matrix<double, 10, 1>;
+using Input4 = Eigen::Matrix<double, 4, 1>;
+using Gain10 = Eigen::Matrix<double, 4, 10>;
+using Joint6 = Eigen::Matrix<double, 6, 1>;
+using Curve8 = Eigen::Matrix<double, 8, 1>;
+enum Index
+{
+  S,
+  V,
+  YAW,
+  YAW_RATE,
+  THETA_L,
+  DTHETA_L,
+  THETA_R,
+  DTHETA_R,
+  BODY_PITCH,
+  BODY_RATE
+};
+enum class Reason
+{
+  None = 0,
+  NotNormal = 1,
+  InvalidSnapshot = 2,
+  InvalidTime = 3,
+  OutsideDomain = 4,
+  Posture = 5,
+  NonfiniteOutput = 7,
+  Terminated = 8,
+  CommandStale = 9
+};
+
+struct PhysicalLeg
+{
+  double mass{0.};
+  Curve8 lb{Curve8::Zero()}, lw{Curve8::Zero()}, inertia{Curve8::Zero()};
+  Curve8 offset{Curve8::Zero()};
+};
+struct PhysicalModel
+{
+  double mb{0.}, Ib{0.}, Izz{0.}, mw{0.}, Iw{0.}, Rw{0.}, Rl{0.}, g{0.}, lc{0.}, phi_c{0.};
+  std::array<PhysicalLeg, 2> legs;
+  Eigen::Vector2d geometry_domain{Eigen::Vector2d::Zero()};
+};
+// Fixed-size stopped-controller transaction. Model/domain/Uff are immutable after init.
+struct GainUpdate
+{
+  Eigen::Matrix<double, 10, 40> coeffs{Eigen::Matrix<double, 10, 40>::Zero()};
+  State10 q{State10::Zero()};
+  Input4 r{Input4::Zero()};
+  uint64_t revision{0};
+};
+struct Config
+{
+  Eigen::Matrix<double, 10, 40> coeffs{Eigen::Matrix<double, 10, 40>::Zero()};
+  Eigen::Matrix<double, 2, 2> domain{Eigen::Matrix<double, 2, 2>::Zero()};
+  Input4 uff{Input4::Zero()};
+  Input4 input_limits{Input4::Zero()};
+  double dt_min{0.}, dt_max{0.}, wheel_radius{0.};
+  double max_command_age{0.};
+  double max_angle{0.}, max_roll{0.}, max_rate{0.};
+  double max_axial_force{0.};
+  PhysicalModel model;
+  State10 q{State10::Zero()};
+  Input4 r{Input4::Zero()};
+  void validateParameters() const;
+};
+
+// Per-controller observation history. Neither side shares a static variable.
+struct ObservationHistory
+{
+  bool initialized{false}, ever_initialized{false};
+  double s{0.}, yaw{0.}, wrapped_yaw{0.}, last_time{0.}, last_v{0.};
+};
+
+// Shared reference history, Normal outputs and controller lifecycle state; not a sensor snapshot.
+struct NormalFeedback
+{
+  State10 reference{State10::Zero()}; // Xref, including the integrated s/yaw targets.
+  bool reference_valid{false};
+  Input4 output{Input4::Zero()}; // U4 consumed by VMC/wheels and the compatibility status.
+  Eigen::Vector2d axial_force{Eigen::Vector2d::Zero()}; // F consumed by VMC and the same status.
+  bool active{false}; // Selects Normal U4/F for status publication; does not authorize control.
+  bool faulted{false}; // Latched until starting(), including faults outside Normal.
+  Reason reason{Reason::NotNormal}; // Reason reported by the existing diagnostic channel.
+  double last_time{-1.}; // Previous control-call time checked in every mode.
+};
+} // namespace lqr10
+
+struct ControlParams
+{
+  double recovery_leg_speed{5.};
+  double jumpOverTime_{5.}, down5cmStairPitchThreshold{.1}, down5cmStairThetaThreshold{.2};
+  double jump_up_force{210.}, off_ground_force{90.};
+};
 struct ModelParams
 {
-  double L_weight;   // Length weight to wheel axis
-  double Lm_weight;  // Length weight to mass center
-  double l;          // Leg rest length
-  double m_w;        // Wheel mass
-  double m_p;        // Leg mass
-  double M;          // Body mass
-  double i_w;        // Wheel inertia
-  double i_p;        // Leg inertia
-  double i_m;        // Body inertia
-  double r;          // Wheel radius
-  double g;          // Gravity acceleration
-  double f_gravity;  // Gravity Force
+  double M{};         // Mass used by existing axial turning compensation, kg.
+  double f_gravity{}; // Per-side nominal axial support, N.
 };
 
 struct ChassisGeometryParams
 {
-  double chassis_height;  // 底盘高度 (m)
-  double wheel_track;     // 轮距(左右)
+  double chassis_height; // 底盘高度 (m)
+  double wheel_track;    // 轮距(左右)
 };
 
 struct SpringParams
@@ -40,22 +127,7 @@ struct SpringParams
   double s2;
   double s3;
   double alpha_s;
-  double f_spring;  // Spring Force
-};
-
-struct ControlParams
-{
-  double jumpOverTime_;
-};
-
-struct BiasParams
-{
-  double x;
-  double theta;
-  double pitch;
-  double roll;
-  double raw_pitch;
-  double raw_theta;
+  double f_spring; // Spring Force
 };
 
 struct LegStateThresholdParams
@@ -71,13 +143,14 @@ struct LegStateThresholdParams
   double upstair_exit_theta_threshold;
   double upstair_exit_length_threshold;
   double unstick_threshold;
+  double arrive_time_threshold;
 };
 
 struct LegCommand
 {
-  double force;     // Thrust
-  double torque;    // Torque
-  double input[2];  // input
+  double force;    // Thrust
+  double torque;   // Torque
+  double input[2]; // input
 };
 
 enum LegOrientation
@@ -102,6 +175,7 @@ enum BalanceMode
   SIT_DOWN,
   RECOVER,
   UPSTAIRS,
+  PROTECT
 };
 
 enum Side
@@ -116,29 +190,33 @@ enum
   LEG_Tp,
 };
 
-enum
+// Named mode views derived from the canonical X10, not a second estimator.
+struct LegPosture
 {
-  THETA = 0,
-  D_THETA,
-  POS,
-  VEL,
-  PITCH,
-  D_PITCH,
+  double theta{0.}, rate{0.};
 };
 
 struct LegState
 {
-  Eigen::Matrix<double, STATE_DIM, 1> x;  // LQR状态量
-  double angle[2];                        // [0]: hip, [1]: knee
-  VMCPtr vmc{ nullptr };
+  LegPosture posture;
+  double angle[2]; // [0]: hip, [1]: knee
+  VMCPtr vmc{nullptr};
   bool unstick = false;
 };
 
 struct ChassisState
 {
+  // Current whole-body observation, shared by Normal and the original mode interface.
+  lqr10::State10 x{lqr10::State10::Zero()};
+  Eigen::Vector2d length{Eigen::Vector2d::Zero()}, dlength{Eigen::Vector2d::Zero()};
+  double time{0.}, dt{0.}, command_age{0.};
+  bool valid{false}, raw_valid{false};
+
+  // Raw body-frame IMU / wrapped attitude also serve recovery outside the LQR observation range.
   geometry_msgs::Vector3 angular_vel;
   geometry_msgs::Vector3 linear_acc;
-  double x_vel = 0.0;
+  double x_vel = 0.0; // Last valid speed for odometry, which runs before the next observation update.
+  double recovery_pitch = 0.0, recovery_roll = 0.0, upright_z = 1.0;
   double roll = 0.0;
   double pitch = 0.0;
   double yaw = 0.0;
@@ -147,6 +225,5 @@ struct ChassisState
 };
 
 constexpr std::array<std::pair<JumpPhase, const double>, 3> jumpLengthDes = {
-  { { JumpPhase::LEG_RETRACTION, 0.11 }, { JumpPhase::JUMP_UP, 0.34 }, { JumpPhase::OFF_GROUND, 0.11 } }
-};
-}  // namespace rm_chassis_controllers
+    {{JumpPhase::LEG_RETRACTION, 0.11}, {JumpPhase::JUMP_UP, 0.34}, {JumpPhase::OFF_GROUND, 0.11}}};
+} // namespace rm_chassis_controllers

@@ -15,17 +15,14 @@ namespace rm_chassis_controllers
 class SitDown : public ModeBase
 {
 public:
-  explicit SitDown(BipedalControllerInterface* controller_,
-                   const std::vector<hardware_interface::JointHandle*>& joint_handles,
-                   const std::vector<control_toolbox::Pid*>& pid_wheels);
-  void execute(const ros::Time& time, const ros::Duration& period) override;
-  const char* name() const override
-  {
-    return "SIT_DOWN";
-  }
+  explicit SitDown(BipedalControllerInterface *controller_,
+                   const std::vector<hardware_interface::JointHandle *> &joint_handles,
+                   const std::vector<control_toolbox::Pid *> &pid_wheels);
+  void execute(const ros::Time &time, const ros::Duration &period) override;
+  const char *name() const override { return "SIT_DOWN"; }
 
 private:
-  std::vector<hardware_interface::JointHandle*> joint_handles_;
-  std::vector<control_toolbox::Pid*> pid_wheels_;
+  std::vector<hardware_interface::JointHandle *> joint_handles_;
+  std::vector<control_toolbox::Pid *> pid_wheels_;
 };
-}  // namespace rm_chassis_controllers
+} // namespace rm_chassis_controllers

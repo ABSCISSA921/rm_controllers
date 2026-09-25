@@ -8,13 +8,6 @@
             type of hardware interface.
         </description>
     </class>
-    <class name="rm_chassis_controllers/ActiveSuspensionController"
-           type="rm_chassis_controllers::ActiveSuspensionController"
-           base_class_type="controller_interface::ControllerBase">
-        <description>
-            The ActiveSuspensionController .
-        </description>
-    </class>
     <class name="rm_chassis_controllers/SentryController"
            type="rm_chassis_controllers::SentryController"
            base_class_type="controller_interface::ControllerBase">
@@ -54,5 +47,4 @@
             The two link vmc controller.
         </description>
     </class>
-
 </library>

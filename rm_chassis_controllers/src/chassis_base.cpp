@@ -130,6 +130,9 @@ bool ChassisBase<T...>::init(hardware_interface::RobotHW* robot_hw, ros::NodeHan
 template <typename... T>
 void ChassisBase<T...>::update(const ros::Time& time, const ros::Duration& period)
 {
+  turn_debug_capture_ = turn_debug_enabled_.load(std::memory_order_relaxed);
+  if (turn_debug_capture_)
+    turn_command_sample_.fill(std::numeric_limits<double>::quiet_NaN());
   rm_msgs::ChassisCmd cmd_chassis = cmd_rt_buffer_.readFromRT()->cmd_chassis_;
   geometry_msgs::Twist cmd_vel = cmd_rt_buffer_.readFromRT()->cmd_vel_;
 
@@ -150,6 +153,14 @@ void ChassisBase<T...>::update(const ros::Time& time, const ros::Duration& perio
     vel_cmd_.z = cmd_vel.angular.z;
   }
 
+  if (turn_debug_capture_)
+  {
+    turn_command_sample_[0] = cmd_vel.linear.x;
+    turn_command_sample_[1] = cmd_vel.linear.y;
+    turn_command_sample_[2] = cmd_vel.angular.z;
+    turn_command_sample_[3] = vel_cmd_.x;
+    turn_command_sample_[4] = vel_cmd_.y;
+  }
   if (cmd_rt_buffer_.readFromRT()->cmd_chassis_.follow_source_frame.empty())
     follow_source_frame_ = "yaw";
   else
@@ -180,12 +191,16 @@ void ChassisBase<T...>::update(const ros::Time& time, const ros::Duration& perio
       break;
   }
 
+  if (turn_debug_capture_)
+    turn_command_sample_[8] = vel_cmd_.z;
   ramp_w_->setAcc(cmd_chassis.accel.angular.z);
   ramp_w_->input(vel_cmd_.z);
   vel_cmd_.z = ramp_w_->output();
+  if (turn_debug_capture_)
+    turn_command_sample_[9] = vel_cmd_.z;
 
   moveJoint(time, period);
-  powerLimit();
+  //  powerLimit();
 }
 
 template <typename... T>
@@ -209,6 +224,12 @@ void ChassisBase<T...>::follow(const ros::Time& time, const ros::Duration& perio
     double follow_error = angles::shortest_angular_distance(yaw, 0);
     pid_follow_.computeCommand(-follow_error, period);
     vel_cmd_.z = pid_follow_.getCurrentCmd() + cmd_rt_buffer_.readFromRT()->cmd_chassis_.follow_vel_des;
+    if (turn_debug_capture_)
+    {
+      turn_command_sample_[5] = -follow_error;
+      turn_command_sample_[6] = pid_follow_.getCurrentCmd();
+      turn_command_sample_[7] = vel_cmd_.z - turn_command_sample_[6];
+    }
   }
   catch (tf2::TransformException& ex)
   {
@@ -252,7 +273,7 @@ void ChassisBase<T...>::twist(const ros::Time& time, const ros::Duration& period
   }
   catch (tf2::TransformException& ex)
   {
-    ROS_WARN("%s", ex.what());
+    //    ROS_WARN("%s", ex.what());
   }
 }
 
@@ -445,7 +466,7 @@ void ChassisBase<T...>::tfVelToBase(const std::string& from)
   }
   catch (tf2::TransformException& ex)
   {
-    ROS_WARN("%s", ex.what());
+    //    ROS_WARN("%s", ex.what());
   }
 }
 

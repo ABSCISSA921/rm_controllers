@@ -27,8 +27,8 @@ find_package(catkin REQUIRED
 find_package(Eigen3 REQUIRED)
 
 generate_dynamic_reconfigure_options(
-  cfg/LQRWeight.cfg
   cfg/PowerLimit.cfg
+  cfg/LQRWeight.cfg
 )
 
 ###################################
@@ -70,9 +70,24 @@ include_directories(
         ${EIGEN3_INCLUDE_DIR}
 )
 
-file(GLOB_RECURSE BIPEDAL_SOURCES
-        "src/bipedal_wheel_controller/*.cpp"
-        "src/bipedal_wheel_controller/*.c"
+set(BIPEDAL_SOURCES
+        src/bipedal_wheel_controller/dynamics/model10.cpp
+        src/bipedal_wheel_controller/dynamics/design10.cpp
+        src/bipedal_wheel_controller/controller.cpp
+        src/bipedal_wheel_controller/controller_mode/mode_base.cpp
+        src/bipedal_wheel_controller/controller_mode/mode_manager.cpp
+        src/bipedal_wheel_controller/controller_mode/normal.cpp
+        src/bipedal_wheel_controller/controller_mode/recover.cpp
+        src/bipedal_wheel_controller/controller_mode/protect.cpp
+        src/bipedal_wheel_controller/controller_mode/upstairs.cpp
+        src/bipedal_wheel_controller/controller_mode/sit_down.cpp
+        src/bipedal_wheel_controller/controller_mode/stand_up.cpp
+        src/bipedal_wheel_controller/series_legged_vmc_controller.cpp
+        src/bipedal_wheel_controller/vmc/VMC.cpp
+        src/bipedal_wheel_controller/vmc/leg_conv.c
+        src/bipedal_wheel_controller/vmc/leg_conv_t.c
+        src/bipedal_wheel_controller/vmc/leg_pos.c
+        src/bipedal_wheel_controller/vmc/leg_spd.c
 )
 
 ## Declare cpp executables
@@ -82,7 +97,6 @@ add_library(${PROJECT_NAME}
         src/sentry.cpp
         src/swerve.cpp
         src/balance.cpp
-        src/active_suspension.cpp
         ${BIPEDAL_SOURCES}
 )
 
@@ -125,12 +139,3 @@ install(
 #############
 ## Testing ##
 #############
-
-#if (${CATKIN_ENABLE_TESTING})
-#  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
-#  ## Add gtest based cpp test target and link libraries
-#  catkin_add_gtest(${PROJECT_NAME}-test
-#      test/test_ros_package_template.cpp
-#      test/AlgorithmTest.cpp)
-#  target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME}_core)
-#endif ()

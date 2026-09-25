@@ -8,18 +8,18 @@
 
 namespace rm_chassis_controllers
 {
-Upstairs::Upstairs(BipedalControllerInterface* controller_,
-                   const std::vector<hardware_interface::JointHandle*>& joint_handles,
-                   const std::vector<control_toolbox::Pid*>& pid_legs,
-                   const std::vector<control_toolbox::Pid*>& pid_thetas)
-  : ModeBase(controller_), joint_handles_(joint_handles), pid_legs_(pid_legs), pid_thetas_(pid_thetas)
+Upstairs::Upstairs(BipedalControllerInterface *controller_,
+                   const std::vector<hardware_interface::JointHandle *> &joint_handles,
+                   const std::vector<control_toolbox::Pid *> &pid_legs,
+                   const std::vector<control_toolbox::Pid *> &pid_thetas)
+    : ModeBase(controller_), joint_handles_(joint_handles), pid_legs_(pid_legs), pid_thetas_(pid_thetas)
 {
 }
 
-void Upstairs::execute(const ros::Time& time, const ros::Duration& period)
+void Upstairs::execute(const ros::Time &time, const ros::Duration &period)
 {
-  auto& left_leg_state = controller->getLegState(LEFT);
-  auto& right_leg_state = controller->getLegState(RIGHT);
+  auto &left_leg_state = controller->getLegState(LEFT);
+  auto &right_leg_state = controller->getLegState(RIGHT);
   if (!controller->getStateChange())
   {
     ROS_INFO("[balance] Enter Upstairs");
@@ -27,21 +27,21 @@ void Upstairs::execute(const ros::Time& time, const ros::Duration& period)
     controller->setCompleteStand(false);
     leg_state_threshold_ = controller->getLegThresholdParams();
     //    vmcPtr_ = controller->getVMCPtr();
-    detectLegState(left_leg_state.x, left_leg_orientation);
-    detectLegState(right_leg_state.x, right_leg_orientation);
+    detectLegState(left_leg_state.posture, left_leg_orientation);
+    detectLegState(right_leg_state.posture, right_leg_orientation);
   }
 
-  const auto& left_pos = left_leg_state.vmc->getPos();
-  const auto& right_pos = right_leg_state.vmc->getPos();
+  const auto &left_pos = left_leg_state.vmc->getPos();
+  const auto &right_pos = right_leg_state.vmc->getPos();
 
-  double theta_des_l{ 1.57 }, theta_des_r{ 1.57 }, length_des_l{ 0.18 }, length_des_r{ 0.18 };
+  double theta_des_l{1.57}, theta_des_r{1.57}, length_des_l{0.18}, length_des_r{0.18};
   auto model_params_ = controller->getModelParams();
   double left_spring_force = -controller->f_spring_force(left_pos.L0),
          right_spring_force = -controller->f_spring_force(right_pos.L0);
 
   length_des_l = length_des_r = leg_state_threshold_->upstair_des_length;
   theta_des_l = theta_des_r = leg_state_threshold_->upstair_des_theta;
-  LegCommand left_cmd = { 0, 0, { 0., 0. } }, right_cmd = { 0, 0, { 0., 0. } };
+  LegCommand left_cmd = {0, 0, {0., 0.}}, right_cmd = {0, 0, {0., 0.}};
   left_cmd = computePidLegCommand(length_des_l, theta_des_l, left_leg_state.vmc, *pid_legs_[0], *pid_thetas_[0],
                                   *pid_thetas_[2], left_leg_orientation, period, left_spring_force);
   right_cmd = computePidLegCommand(length_des_r, theta_des_r, right_leg_state.vmc, *pid_legs_[1], *pid_thetas_[1],
@@ -50,7 +50,9 @@ void Upstairs::execute(const ros::Time& time, const ros::Duration& period)
 
   // Exit
   if (left_pos.theta > leg_state_threshold_->upstair_exit_theta_threshold &&
-      right_pos.theta > leg_state_threshold_->upstair_exit_theta_threshold)
+      right_pos.theta > leg_state_threshold_->upstair_exit_theta_threshold &&
+      left_pos.L0 < leg_state_threshold_->upstair_exit_length_threshold &&
+      right_pos.L0 < leg_state_threshold_->upstair_exit_length_threshold)
   {
     controller->pubLegLenStatus(true);
     controller->setMode(BalanceMode::STAND_UP);
@@ -59,43 +61,43 @@ void Upstairs::execute(const ros::Time& time, const ros::Duration& period)
   }
 }
 
-inline void Upstairs::detectLegState(const Eigen::Matrix<double, STATE_DIM, 1>& x, LegOrientation& leg_state)
+inline void Upstairs::detectLegState(const LegPosture &posture, LegOrientation &leg_state)
 {
   if (!leg_state_threshold_)
   {
     ROS_ERROR_THROTTLE(1.0, "LegUtils threshold params not initialized!");
     return;
   }
-  if (x[0] > leg_state_threshold_->under_lower && x[0] < leg_state_threshold_->under_upper)
+  if (posture.theta > leg_state_threshold_->under_lower && posture.theta < leg_state_threshold_->under_upper)
     leg_state = LegOrientation::UNDER;
-  else if ((x[0] < leg_state_threshold_->front_lower && x[0] > -M_PI) ||
-           (x[0] < M_PI && x[0] > leg_state_threshold_->front_upper))
+  else if ((posture.theta < leg_state_threshold_->front_lower && posture.theta > -M_PI) ||
+           (posture.theta < M_PI && posture.theta > leg_state_threshold_->front_upper))
     leg_state = LegOrientation::FRONT;
-  else if (x[0] > leg_state_threshold_->behind_lower && x[0] < leg_state_threshold_->behind_upper)
+  else if (posture.theta > leg_state_threshold_->behind_lower && posture.theta < leg_state_threshold_->behind_upper)
     leg_state = LegOrientation::BEHIND;
   switch (leg_state)
   {
-    case LegOrientation::UNDER:
-      ROS_INFO("[balance] x[0]: %.3f Leg state: UNDER", x[0]);
-      break;
-    case LegOrientation::FRONT:
-      ROS_INFO("[balance] x[0]: %.3f Leg state: FRONT", x[0]);
-      break;
-    case LegOrientation::BEHIND:
-      ROS_INFO("[balance] x[0]: %.3f Leg state: BEHIND", x[0]);
-      break;
+  case LegOrientation::UNDER:
+    ROS_INFO("[balance] posture.theta: %.3f Leg state: UNDER", posture.theta);
+    break;
+  case LegOrientation::FRONT:
+    ROS_INFO("[balance] posture.theta: %.3f Leg state: FRONT", posture.theta);
+    break;
+  case LegOrientation::BEHIND:
+    ROS_INFO("[balance] posture.theta: %.3f Leg state: BEHIND", posture.theta);
+    break;
   }
 }
 
-inline LegCommand Upstairs::computePidLegCommand(double desired_length, double desired_angle, const VMCPtr& vmc_,
-                                                 control_toolbox::Pid& length_pid, control_toolbox::Pid& angle_pid,
-                                                 control_toolbox::Pid& angle_vel_pid,
-                                                 const LegOrientation& leg_orientation, const ros::Duration& period,
-                                                 double& feedforward_force)
+inline LegCommand Upstairs::computePidLegCommand(double desired_length, double desired_angle, const VMCPtr &vmc_,
+                                                 control_toolbox::Pid &length_pid, control_toolbox::Pid &angle_pid,
+                                                 control_toolbox::Pid &angle_vel_pid,
+                                                 const LegOrientation &leg_orientation, const ros::Duration &period,
+                                                 double &feedforward_force)
 {
-  LegCommand cmd{ 0.0, 0.0, { 0.0, 0.0 } };
-  const auto& leg_pos = vmc_->getPos();
-  const auto& leg_spd = vmc_->getSpd();
+  LegCommand cmd{0.0, 0.0, {0.0, 0.0}};
+  const auto &leg_pos = vmc_->getPos();
+  const auto &leg_spd = vmc_->getSpd();
 
   cmd.force = length_pid.computeCommand(desired_length - leg_pos.L0, period) + feedforward_force;
   cmd.force = abs(cmd.force) > 250 ? std::copysign(1, cmd.force) * 250 : cmd.force;
@@ -110,4 +112,4 @@ inline LegCommand Upstairs::computePidLegCommand(double desired_length, double d
   vmc_->leg_conv(cmd.force, cmd.torque, cmd.input);
   return cmd;
 }
-}  // namespace rm_chassis_controllers
+} // namespace rm_chassis_controllers

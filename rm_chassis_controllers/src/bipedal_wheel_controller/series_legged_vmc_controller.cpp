@@ -65,7 +65,6 @@ bool VMCController::init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle&
   jointThigh_ = robot_hw->get<hardware_interface::EffortJointInterface>()->getHandle(thighJoint);
   jointKnee_ = robot_hw->get<hardware_interface::EffortJointInterface>()->getHandle(kneeJoint);
 
-  debugPub_ = std::make_shared<DebugDataPublisher>(controller_nh, "vmc_debug_data");
   return true;
 }
 
@@ -123,8 +122,6 @@ void VMCController::update(const ros::Time& time, const ros::Duration& period)
     Tp_leg_comp = G_leg * l_leg * sin(beta);
     effortCmd[0] = F_leg_comp - f_spring_force_comp;
     effortCmd[1] = Tp_leg_comp;
-    debugPub_->add("F_leg_comp", F_leg_comp);
-    debugPub_->add("Tp_leg_comp", Tp_leg_comp);
   }
   else
   {
@@ -147,9 +144,6 @@ void VMCController::update(const ros::Time& time, const ros::Duration& period)
   state.data.push_back(jointCmd[1]);
   statePublisher_.publish(state);
 
-  debugPub_->add("f_spring_force", f_spring_force_comp);
-  debugPub_->add("F_effortCmd", effortCmd[0]);
-  debugPub_->publish();
 
   std_msgs::Float64MultiArray jointCmdState;
   jointCmdState.data.push_back(jointCmd[0]);
@@ -162,15 +156,15 @@ void VMCController::update(const ros::Time& time, const ros::Duration& period)
 
 double VMCController::f_spring_force(double L0)
 {
-  //  double l1 = vmcPtr_->getL1(), l2 = vmcPtr_->getL2(), Fs = spring_force_, s2 = s2_, s3 = s3_, alpha_s = alpha_s_;
-  //  double cos_theta3, theta3, ls, Fv;
-  //  cos_theta3 = (l1 * l1 + l2 * l2 - L0 * L0) / (2 * l1 * l2);
-  //  theta3 = acos(cos_theta3);
-  //  ls = sqrt(s2 * s2 + s3 * s3 - 2 * s2 * s3 * cos(theta3 - alpha_s));
-  //  Fv = Fs * (L0 * s2 * s3 * sin(theta3 - alpha_s)) / (ls * l1 * l2 * sin(theta3));
-  //  return Fv;
+  double l1 = vmcPtr_->getL1(), l2 = vmcPtr_->getL2(), Fs = spring_force_, s2 = s2_, s3 = s3_, alpha_s = alpha_s_;
+  double cos_theta3, theta3, ls, Fv;
+  cos_theta3 = (l1 * l1 + l2 * l2 - L0 * L0) / (2 * l1 * l2);
+  theta3 = acos(cos_theta3);
+  ls = sqrt(s2 * s2 + s3 * s3 - 2 * s2 * s3 * cos(theta3 - alpha_s));
+  Fv = Fs * (L0 * s2 * s3 * sin(theta3 - alpha_s)) / (ls * l1 * l2 * sin(theta3));
+  return Fv;
 
-  return ((2094.45f * L0 - 3091.28f) * L0 + 1408.375f) * L0 - 80.91f;
+  //  return (((2094.45f * L0 - 3091.28f) * L0 + 1408.375f) * L0 - 80.91f);
 }
 
 }  // namespace rm_chassis_controllers
