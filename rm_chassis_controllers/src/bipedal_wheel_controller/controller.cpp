@@ -3,7 +3,9 @@
 //
 
 #include "bipedal_wheel_controller/controller.h"
+#include <limits>
 #include <stdexcept>
+#include <urdf/model.h>
 
 #include <angles/angles.h>
 #include <geometry_msgs/Quaternion.h>
@@ -81,8 +83,18 @@ bool BipedalController::init(hardware_interface::RobotHW *robot_hw, ros::NodeHan
   turn_debug_enabled_.store(turn_debug_capture_, std::memory_order_relaxed);
   turn_debug_pub_.reset(new realtime_tools::RealtimePublisher<rm_msgs::DebugData>(controller_nh, "turn_debug", 4));
   turn_debug_pub_->msg_.name = {"cycle", "time", "dt", "base_mode", "selected_mode", "requested_mode", "complete_before", "complete_after", "raw_valid", "valid", "fault", "reason", "feedback_computed", "feedback_submitted", "roll", "cmd_v", "cmd_r", "leg_cmd", "Ltarget", "Lref", "circle", "alpha", "command_age", "x_0", "x_1", "x_2", "x_3", "x_4", "x_5", "x_6", "x_7", "x_8", "x_9", "xref_0", "xref_1", "xref_2", "xref_3", "xref_4", "xref_5", "xref_6", "xref_7", "xref_8", "xref_9", "L_0", "L_1", "dL_0", "dL_1", "uraw_0", "uraw_1", "uraw_2", "uraw_3", "ulimited_0", "ulimited_1", "ulimited_2", "ulimited_3", "uff_0", "uff_1", "uff_2", "uff_3", "pid_raw_0", "pid_raw_1", "pid_0", "pid_1", "turning_0", "turning_1", "gravity_0", "gravity_1", "roll_force_0", "roll_force_1", "spring_0", "spring_1", "fraw_0", "fraw_1", "flimited_0", "flimited_1", "candidate_0", "candidate_1", "candidate_2", "candidate_3", "candidate_4", "candidate_5", "command_0", "command_1", "command_2", "command_3", "command_4", "command_5", "q_0", "q_1", "q_2", "q_3", "q_4", "q_5", "dq_0", "dq_1", "dq_2", "dq_3", "dq_4", "dq_5", "effort_0", "effort_1", "effort_2", "effort_3", "effort_4", "effort_5", "msg_vx", "msg_vy", "msg_w", "ramp_x", "ramp_y", "follow_error", "follow_pid", "follow_ff", "yaw_pre_ramp", "yaw_post_ramp", "K_0_0", "K_0_1", "K_0_2", "K_0_3", "K_0_4", "K_0_5", "K_0_6", "K_0_7", "K_0_8", "K_0_9", "K_1_0", "K_1_1", "K_1_2", "K_1_3", "K_1_4", "K_1_5", "K_1_6", "K_1_7", "K_1_8", "K_1_9", "K_2_0", "K_2_1", "K_2_2", "K_2_3", "K_2_4", "K_2_5", "K_2_6", "K_2_7", "K_2_8", "K_2_9", "K_3_0", "K_3_1", "K_3_2", "K_3_3", "K_3_4", "K_3_5", "K_3_6", "K_3_7", "K_3_8", "K_3_9", "reference_initialized", "mode_executed", "estimation_computed", "local_theta_0", "local_theta_1"};
-  turn_debug_pub_->msg_.value.resize(160);
-  turn_debug_pub_->msg_.stamp.resize(160);
+  const std::vector<std::string> velocity_fields = {
+      "v_kin", "v_fused", "kf_updated", "kf_seeded", "kf_innovation_velocity", "kf_innovation_acceleration", "kf_point_velocity_raw",
+      "kf_acc_world_x", "kf_acc_world_y", "kf_acc_world_z", "kf_heading_velocity", "kf_heading_acceleration", "kf_point_velocity_filtered",
+      "imu_acc_base_x", "imu_acc_base_y", "imu_acc_base_z", "imu_gyro_base_x", "imu_gyro_base_y", "imu_gyro_base_z",
+      "wrapped_yaw", "raw_pitch", "kf_update_us", "jump_phase", "kf_attempted",
+      "kf_predicted_velocity", "kf_predicted_acceleration", "kf_velocity_observation_raw", "kf_acceleration_observation_raw",
+      "kf_velocity_observation", "kf_acceleration_observation", "kf_point_velocity_lateral", "kf_turning_acceleration",
+      "kf_velocity_variance", "kf_velocity_gain", "kf_acceleration_velocity_gain", "kf_velocity_deweighted", "kf_velocity_residual"};
+  auto &names = turn_debug_pub_->msg_.name;
+  names.insert(names.end(), velocity_fields.begin(), velocity_fields.end());
+  turn_debug_pub_->msg_.value.resize(turn_debug_.size());
+  turn_debug_pub_->msg_.stamp.resize(turn_debug_.size());
   turn_debug_timer_ = controller_nh.createWallTimer(ros::WallDuration(.5),
       [this, controller_nh](const ros::WallTimerEvent &) {
         bool enabled = false;
@@ -105,6 +117,7 @@ bool BipedalController::down5cmStairSrvCallback(std_srvs::Trigger::Request &req,
 
 void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &period)
 {
+  turn_debug_capture_ = turn_debug_enabled_.load(std::memory_order_relaxed);
   if (turn_debug_capture_)
   {
     turn_debug_.fill(std::numeric_limits<double>::quiet_NaN());
@@ -113,6 +126,7 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
     turn_debug_[2] = period.toSec();
     turn_debug_[6] = complete_stand_;
     turn_debug_[12] = turn_debug_[13] = turn_debug_[156] = turn_debug_[157] = 0.;
+    turn_debug_[162] = turn_debug_[183] = 0.;
   }
   const bool status_due = time.toSec() - last_status_time_ >= .01 || time.toSec() < last_status_time_;
   if (status_due)
@@ -125,6 +139,7 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
     last_leg_setpoint_ = leg_setpoint.received;
   }
   auto zero_output = [this, status_due]() {
+    finishObservation();
     if (turn_debug_capture_)
       turn_debug_[13] = 0.;
     setJointCommands(joint_handles_, {0, 0, {0., 0.}}, {0, 0, {0., 0.}});
@@ -132,13 +147,13 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
       publishCompatibilityStatus();
     publishTurnDebug();
   };
+  resetObservation(time, period);
   if (!std::isfinite(period.toSec()) || period.toSec() <= 0.)
   {
     latchControlFault(lqr10::Reason::InvalidTime);
     zero_output();
     return;
   }
-  resetObservation(time, period);
   if (!updateEstimation(time, period))
   {
     validateObservationTime();
@@ -205,6 +220,7 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
     zero_output();
     return;
   }
+  finishObservation();
   if (status_due)
     publishCompatibilityStatus();
   pubState();
@@ -247,8 +263,7 @@ void BipedalController::publishTurnDebug()
     turn_debug_[93 + i] = joint_handles_[i]->getVelocity();
     turn_debug_[99 + i] = joint_handles_[i]->getEffort();
   }
-  for (int i = 0; i < 10; ++i)
-    turn_debug_[105 + i] = turn_command_sample_[i];
+  // Slots 105..114 belonged to ChassisBase instrumentation; leave them missing (NaN).
   auto &m = turn_debug_pub_->msg_;
   for (size_t i = 0; i < turn_debug_.size(); ++i)
   {
@@ -321,6 +336,23 @@ bool BipedalController::updateEstimation(const ros::Time &time, const ros::Durat
     chassis_state_.roll = roll;
     chassis_state_.pitch = pitch;
     chassis_state_.yaw = yaw;
+    const auto &imu_translation = imu_to_base.transform.translation;
+    imu_position_base_ << imu_translation.x, imu_translation.y, imu_translation.z;
+    const auto &rotation = odom2base.getBasis();
+    for (int row = 0; row < 3; ++row)
+      for (int col = 0; col < 3; ++col)
+        rotation_world_base_(row, col) = rotation[row][col];
+    if (turn_debug_capture_)
+    {
+      turn_debug_[173] = linear_acc_base.x;
+      turn_debug_[174] = linear_acc_base.y;
+      turn_debug_[175] = linear_acc_base.z;
+      turn_debug_[176] = angular_vel_base.x;
+      turn_debug_[177] = angular_vel_base.y;
+      turn_debug_[178] = angular_vel_base.z;
+      turn_debug_[179] = yaw;
+      turn_debug_[180] = pitch;
+    }
   }
   catch (tf2::TransformException &ex)
   {
@@ -360,6 +392,7 @@ bool BipedalController::updateEstimation(const ros::Time &time, const ros::Durat
 
 void BipedalController::resetObservation(const ros::Time &time, const ros::Duration &period)
 {
+  velocity_integrated_ = false;
   // Invalidate this cycle before reading feedback; do not clear the original action/odometry state.
   chassis_state_.x.setZero();
   chassis_state_.length.setZero();
@@ -398,7 +431,6 @@ void BipedalController::updateChassisState(const ros::Time &time)
     observe(pitch_rate, carrier_rates);
   if (chassis.valid)
   {
-    chassis_state_.x_vel = chassis.x[lqr10::V];
     for (int side = 0; side < 2; ++side)
     {
       leg_state_[side].posture.theta = chassis.x[lqr10::THETA_L + 2 * side];
@@ -495,6 +527,7 @@ void BipedalController::starting(const ros::Time &time)
   normal_feedback_ = lqr10::NormalFeedback{};
   resetObservation(ros::Time(0), ros::Duration(0));
   observation_history_ = lqr10::ObservationHistory{};
+  velocity_kf_.reset();
   start_time_ = time;
   command_authorized_ = false;
   balance_mode_ = SIT_DOWN;
@@ -512,6 +545,7 @@ void BipedalController::starting(const ros::Time &time)
 
 void BipedalController::stopping(const ros::Time &time)
 {
+  velocity_kf_.reset();
   latchControlFault(lqr10::Reason::Terminated);
   balance_mode_ = BalanceMode::SIT_DOWN;
   setStateChange(false);
@@ -544,7 +578,7 @@ bool BipedalController::setupParams(ros::NodeHandle &controller_nh)
   if (!setupModelParams(controller_nh) || !setupThresholdParams(controller_nh) || !setupSpringParams(controller_nh) ||
       !setupChassisGeometryParams(controller_nh))
     return false;
-  return setupLQR(controller_nh);
+  return setupVelocityEstimator(controller_nh) && setupLQR(controller_nh);
 }
 
 bool BipedalController::setupModelParams(ros::NodeHandle &controller_nh)
@@ -818,18 +852,16 @@ bool BipedalController::observe(double pitch_rate, const Eigen::Vector2d &carrie
     }
     else
       history.yaw += std::remainder(rpy[2] - history.wrapped_yaw, 2 * M_PI);
-    history.initialized = true;
   }
   else
   {
-    history.s += (history.last_v + v) * dt / 2.;
     history.yaw += std::remainder(rpy[2] - history.wrapped_yaw, 2 * M_PI);
   }
-  history.last_v = v;
   history.wrapped_yaw = rpy[2];
-  history.last_time = time;
   out.x[S] = history.s;
   out.x[V] = v;
+  if (turn_debug_capture_)
+    turn_debug_[160] = v;
   out.x[YAW] = history.yaw;
   out.x[YAW_RATE] = yaw_rate;
   out.x[BODY_PITCH] = rpy[1];
@@ -838,6 +870,107 @@ bool BipedalController::observe(double pitch_rate, const Eigen::Vector2d &carrie
   out.valid = out.x.allFinite();
   return out.valid;
 }
+// Called only by the ordinary Normal ground branch, before circle and K10.
+bool BipedalController::updateGroundVelocity()
+{
+  auto &chassis = chassis_state_;
+  if (!chassis.valid)
+    return false;
+  VelocityKalmanFilter::Input input;
+  input.rotation_world_base = rotation_world_base_;
+  input.yaw = chassis.yaw;
+  input.yaw_rate = chassis.x[lqr10::YAW_RATE];
+  input.specific_force_base << chassis.linear_acc.x, chassis.linear_acc.y, chassis.linear_acc.z;
+  input.angular_velocity_base << chassis.angular_vel.x, chassis.angular_vel.y, chassis.angular_vel.z;
+  input.imu_position_base = imu_position_base_;
+  // VMC endpoint approximation of the physical wheel midpoint. Keep this
+  // geometry boundary outside the KF; it does not change VMC's force mapping.
+  input.wheel_midpoint_base = hip_midpoint_base_;
+  input.wheel_midpoint_rate_base.setZero();
+  for (int side = 0; side < 2; ++side)
+  {
+    const double length = chassis.length[side], length_rate = chassis.dlength[side];
+    const double angle = leg_state_[side].vmc->getPos().theta;
+    const double angle_rate = chassis.x[lqr10::DTHETA_L + 2 * side] - chassis.x[lqr10::BODY_RATE];
+    const double sine = std::sin(angle), cosine = std::cos(angle);
+    input.wheel_midpoint_base += .5 * Eigen::Vector3d(-length * sine, 0., -length * cosine);
+    input.wheel_midpoint_rate_base += .5 * Eigen::Vector3d(
+        -length_rate * sine - length * cosine * angle_rate, 0.,
+        -length_rate * cosine + length * sine * angle_rate);
+  }
+  input.kinematic_velocity = chassis.x[lqr10::V];
+  input.dt = chassis.dt;
+  VelocityKalmanFilter::Output output;
+  const auto begin = turn_debug_capture_ ? ros::WallTime::now() : ros::WallTime();
+  if (turn_debug_capture_)
+    turn_debug_[183] = 1.;
+  if (!velocity_kf_.update(input, output))
+  {
+    chassis.valid = false;
+    velocity_kf_.reset();
+    return false;
+  }
+  chassis.x[lqr10::V] = output.velocity;
+  integrateVelocity();
+  if (turn_debug_capture_)
+  {
+    turn_debug_[161] = output.velocity;
+    turn_debug_[162] = 1.;
+    turn_debug_[163] = output.seeded;
+    turn_debug_[164] = output.innovation[0];
+    turn_debug_[165] = output.innovation[1];
+    turn_debug_[166] = output.point_velocity_raw;
+    for (int axis = 0; axis < 3; ++axis)
+      turn_debug_[167 + axis] = output.acceleration_world[axis];
+    turn_debug_[170] = output.state[0];
+    turn_debug_[171] = output.state[1];
+    turn_debug_[172] = output.point_velocity_filtered;
+    turn_debug_[181] = (ros::WallTime::now() - begin).toSec() * 1e6;
+    for (int axis = 0; axis < 2; ++axis)
+    {
+      turn_debug_[184 + axis] = output.predicted[axis];
+      turn_debug_[186 + axis] = output.observation_raw[axis];
+      turn_debug_[188 + axis] = output.observation[axis];
+    }
+    turn_debug_[190] = output.point_velocity_lateral;
+    turn_debug_[191] = output.turning_acceleration;
+    turn_debug_[192] = output.velocity_variance;
+    turn_debug_[193] = output.velocity_gain;
+    turn_debug_[194] = output.acceleration_velocity_gain;
+    turn_debug_[195] = output.velocity_deweighted;
+    turn_debug_[196] = output.velocity_residual;
+  }
+  return true;
+}
+
+void BipedalController::integrateVelocity()
+{
+  if (!chassis_state_.valid || velocity_integrated_)
+    return;
+  auto &history = observation_history_;
+  auto &chassis = chassis_state_;
+  if (history.initialized)
+    history.s += (history.last_v + chassis.x[lqr10::V]) * chassis.dt / 2.;
+  history.last_v = chassis.x[lqr10::V];
+  history.last_time = chassis.time;
+  history.initialized = true;
+  chassis.x[lqr10::S] = history.s;
+  chassis.x_vel = chassis.x[lqr10::V];
+  velocity_integrated_ = true;
+}
+
+void BipedalController::finishObservation()
+{
+  // No ground update this frame: retain the original kinematic observation.
+  if (!velocity_integrated_)
+  {
+    velocity_kf_.reset();
+    integrateVelocity();
+  }
+  if (!chassis_state_.valid || normal_feedback_.faulted)
+    velocity_kf_.reset();
+}
+
 namespace
 {
 template <int Rows>
@@ -859,6 +992,48 @@ bool getVectorParam(const ros::NodeHandle &nh, const std::string &name, Eigen::M
   return true;
 }
 } // namespace
+
+bool BipedalController::setupVelocityEstimator(ros::NodeHandle &controller_nh)
+{
+  VelocityKalmanFilter::Params params;
+  const std::pair<const char *, double *> parameters[] = {
+      {"velocity_estimator/velocity_process_density", &params.velocity_process_density},
+      {"velocity_estimator/jerk_density", &params.jerk_density},
+      {"velocity_estimator/velocity_stddev", &params.velocity_stddev},
+      {"velocity_estimator/acceleration_stddev", &params.acceleration_stddev},
+      {"velocity_estimator/velocity_filter_tau", &params.velocity_filter_tau},
+      {"velocity_estimator/acceleration_filter_tau", &params.acceleration_filter_tau},
+      {"velocity_estimator/velocity_residual_threshold", &params.velocity_residual_threshold},
+      {"velocity_estimator/velocity_noise_multiplier", &params.velocity_noise_multiplier}};
+  for (const auto &parameter : parameters)
+    if (!controller_nh.getParam(parameter.first, *parameter.second))
+    {
+      ROS_ERROR("Missing velocity estimator parameter: %s", parameter.first);
+      return false;
+    }
+  if (!velocity_kf_.configure(params))
+  {
+    ROS_ERROR("Invalid or missing velocity_estimator parameters");
+    return false;
+  }
+  // Read only installation origins at init; runtime wheel geometry comes from the existing VMC.
+  urdf::Model robot;
+  if (!robot.initParam("robot_description"))
+    return false;
+  hip_midpoint_base_.setZero();
+  for (const char *name : {"left_hip_joint", "right_hip_joint"})
+  {
+    const auto joint = robot.getJoint(name);
+    if (!joint || joint->parent_link_name != "base_link")
+    {
+      ROS_ERROR("Velocity estimator requires hip installation origins relative to base_link");
+      return false;
+    }
+    const auto &position = joint->parent_to_joint_origin_transform.position;
+    hip_midpoint_base_ += .5 * Eigen::Vector3d(position.x, position.y, position.z);
+  }
+  return true;
+}
 
 bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, lqr10::Config &config)
 {

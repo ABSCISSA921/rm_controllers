@@ -22,6 +22,7 @@ find_package(catkin REQUIRED
         nav_msgs
         angles
         dynamic_reconfigure
+        urdf
 )
 
 find_package(Eigen3 REQUIRED)
@@ -55,6 +56,7 @@ catkin_package(
         nav_msgs
         angles
         dynamic_reconfigure
+        urdf
         LIBRARIES ${PROJECT_NAME}
 )
 
@@ -71,6 +73,7 @@ include_directories(
 )
 
 set(BIPEDAL_SOURCES
+        src/bipedal_wheel_controller/estimation/velocity_kf.cpp
         src/bipedal_wheel_controller/dynamics/model10.cpp
         src/bipedal_wheel_controller/dynamics/design10.cpp
         src/bipedal_wheel_controller/controller.cpp

@@ -33,6 +33,8 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     controller->setStateChange(true);
     ROS_INFO("[balance] Enter NORMAL with ten-state feedback");
   }
+  if (static_cast<BipedalController *>(controller)->turn_debug_capture_)
+    static_cast<BipedalController *>(controller)->turn_debug_[182] = jump_phase_;
   if (feedback.faulted)
     return;
   const auto &action = controller->getActionParams();
@@ -65,6 +67,8 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   }
   if (jump_phase_ != IDLE)
   {
+    if (static_cast<BipedalController *>(controller)->turn_debug_capture_)
+      static_cast<BipedalController *>(controller)->turn_debug_[182] = jump_phase_;
     executeJump(time, period);
     return;
   }
@@ -149,6 +153,11 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
       posture_exit(PROTECT);
       return;
     }
+  }
+  if (!recorder->updateGroundVelocity())
+  {
+    reject(lqr10::Reason::InvalidSnapshot);
+    return;
   }
   const double circle = chassis.x[lqr10::V] * chassis.x[lqr10::YAW_RATE];
   const double alpha = std::abs(circle) > 10. ? 10. / std::abs(circle) : 1.;

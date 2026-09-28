@@ -20,11 +20,13 @@
 #include <std_msgs/Float64.h>
 #include <std_msgs/Bool.h>
 #include <std_srvs/Trigger.h>
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <dynamic_reconfigure/server.h>
 #include <rm_chassis_controllers/LQRWeightConfig.h>
 #include "bipedal_wheel_controller/dynamics/model10.h"
+#include "bipedal_wheel_controller/estimation/velocity_kf.h"
 #include "rm_chassis_controllers/chassis_base.h"
 
 #include "bipedal_wheel_controller/helper_functions.h"
@@ -90,7 +92,9 @@ protected:
 private:
   friend class Normal;
   // Fixed recording storage, reset to missing each control call. No control consumers.
-  std::array<double, 160> turn_debug_{};
+  std::atomic<bool> turn_debug_enabled_{false};
+  bool turn_debug_capture_{false};
+  std::array<double, 197> turn_debug_{};
   uint64_t turn_debug_cycle_{0};
   std::unique_ptr<realtime_tools::RealtimePublisher<rm_msgs::DebugData>> turn_debug_pub_;
   ros::WallTimer turn_debug_timer_;
@@ -105,6 +109,14 @@ private:
   ros::Time start_time_;
   bool command_authorized_{false};
   lqr10::ObservationHistory observation_history_;
+  VelocityKalmanFilter velocity_kf_;
+  Eigen::Matrix3d rotation_world_base_{Eigen::Matrix3d::Identity()};
+  Eigen::Vector3d imu_position_base_{Eigen::Vector3d::Zero()}, hip_midpoint_base_{Eigen::Vector3d::Zero()};
+  bool velocity_integrated_{false}; // Exactly one S/last_v update per valid observation.
+  bool setupVelocityEstimator(ros::NodeHandle &controller_nh);
+  bool updateGroundVelocity();
+  void integrateVelocity();
+  void finishObservation();
 
   bool setupParams(ros::NodeHandle &controller_nh);
   bool loadLqrParams(ros::NodeHandle &controller_nh, lqr10::Config &config);

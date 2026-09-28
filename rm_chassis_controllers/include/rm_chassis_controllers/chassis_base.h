@@ -37,9 +37,6 @@
 
 #pragma once
 
-#include <array>
-#include <atomic>
-#include <limits>
 #include <controller_interface/multi_interface_controller.h>
 #include <hardware_interface/joint_command_interface.h>
 #include <rm_common/hardware_interface/robot_state_interface.h>
@@ -147,10 +144,6 @@ protected:
   void outsideOdomCallback(const nav_msgs::Odometry::ConstPtr& msg);
   void powerLimitReconfigCB(rm_chassis_controllers::PowerLimitConfig& config, uint32_t level);
 
-  // Read-only turn recording; never consumed by the control calculation.
-  std::atomic<bool> turn_debug_enabled_{false};
-  bool turn_debug_capture_{false};
-  std::array<double, 10> turn_command_sample_{};
   rm_control::RobotStateHandle robot_state_handle_{};
   hardware_interface::EffortJointInterface* effort_joint_interface_{};
   std::vector<hardware_interface::JointHandle> joint_handles_{};
