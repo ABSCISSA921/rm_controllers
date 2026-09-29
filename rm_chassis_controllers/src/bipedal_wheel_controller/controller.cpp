@@ -172,6 +172,10 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
     return;
   }
   const Command command = *cmd_rt_buffer_.readFromRT();
+  // Reuse this derived controller snapshot and the already evaluated XY ramps.
+  // Capture also requires zero Normal Vref; no changes to ChassisBase processing.
+  translation_source_active_ = command.cmd_vel_.linear.x != 0. || command.cmd_vel_.linear.y != 0.;
+  translation_ramp_zero_ = ramp_x_->output() == 0. && ramp_y_->output() == 0.;
   command_authorized_ =
       command_authorized_ || (command.stamp_ > start_time_ && command.cmd_chassis_.stamp > start_time_);
   if (!command_authorized_)
@@ -736,7 +740,10 @@ void Config::validateParameters() const
                              max_angle,
                              max_roll,
                              max_rate,
-                             max_axial_force};
+                             max_axial_force,
+                             length_reference_tau,
+                             position_release_tau,
+                             hold_capture_speed};
   for (double value : positive)
     if (!std::isfinite(value) || value <= 0.)
       throw std::invalid_argument("lqr10: missing/nonpositive numeric contract");
@@ -1053,7 +1060,10 @@ bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, lqr10::Con
       {"lqr10/gate/max_angle", &config.max_angle},
       {"lqr10/gate/max_roll", &config.max_roll},
       {"lqr10/gate/max_rate", &config.max_rate},
-      {"lqr10/gate/max_axial_force", &config.max_axial_force}};
+      {"lqr10/gate/max_axial_force", &config.max_axial_force},
+      {"normal_reference/length_tau", &config.length_reference_tau},
+      {"normal_reference/position_release_tau", &config.position_release_tau},
+      {"normal_reference/hold_capture_speed", &config.hold_capture_speed}};
   for (const auto &entry : parameters)
     if (!controller_nh.getParam(entry.first, *entry.second))
     {

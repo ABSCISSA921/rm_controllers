@@ -77,6 +77,8 @@ struct Config
   double max_command_age{0.};
   double max_angle{0.}, max_roll{0.}, max_rate{0.};
   double max_axial_force{0.};
+  double length_reference_tau{0.};
+  double position_release_tau{0.}, hold_capture_speed{0.};
   PhysicalModel model;
   State10 q{State10::Zero()};
   Input4 r{Input4::Zero()};

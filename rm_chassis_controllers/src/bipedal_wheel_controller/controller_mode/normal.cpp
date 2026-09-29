@@ -23,7 +23,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   {
     jump_phase_ = IDLE;
     jump_dwell_ = 0.;
-    length_reference_ = (lp.L0 + rp.L0) / 2.;
+    length_reference_.reset((lp.L0 + rp.L0) / 2.);
     roll_->reset();
     for (auto *pid : legs_)
       pid->reset();
@@ -171,9 +171,16 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     return;
   if (feedback.faulted || !controller->getStateChange())
     return;
-  length_reference_ = complete_stand ? .8 * length_reference_ + .2 * requested_length : requested_length;
+  // Second-order length shaping is inactive; retain the former path for reference.
+  // if (complete_stand)
+  //   length_reference_.update(requested_length, chassis.dt, config.length_reference_tau);
+  // else
+  //   length_reference_.reset(requested_length);
+  // Pass the checked effective target to the existing PID on this cycle.
+  // This resets only the unused length generator, not PID/KF/longitudinal history.
+  length_reference_.reset(requested_length);
   if (recorder->turn_debug_capture_)
-    recorder->turn_debug_[19] = length_reference_;
+    recorder->turn_debug_[19] = length_reference_.position;
   const double current_length = (lp.L0 + rp.L0) / 2.;
   const double roll_force = roll_->computeCommand(-chassis.roll, period);
   const auto &model = controller->getModelParams();
@@ -185,7 +192,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     // Differentiate the measured mean leg length, not a discrete setpoint
     // change. This keeps the existing P/I/D gains while avoiding a derivative
     // kick when complete_stand opens the .20 m command.
-    const double length_error = length_reference_ - current_length;
+    const double length_error = length_reference_.position - current_length;
     const double length_error_dot = -chassis.dlength.mean();
     double pid = legs_[side]->computeCommand(length_error, length_error_dot, period);
     if (recorder->turn_debug_capture_)
@@ -352,6 +359,7 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
     feedback.reference[S] = chassis.x[S];
     feedback.reference[YAW] = chassis.x[YAW];
     feedback.reference_valid = true;
+    longitudinal_reference_.reset(controller->getCompleteStand());
   }
   // Absolute physical angles remain in the observation. Only the commanded static
   // equilibrium is scheduled; s/yaw history is initialized once per Normal entry.
@@ -359,7 +367,9 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
     feedback.reference[i] = equilibrium[i];
   feedback.reference[V] = velocity;
   feedback.reference[YAW_RATE] = yaw_rate;
-  feedback.reference[S] += velocity * chassis.dt;
+  longitudinal_reference_.update(chassis.x[S], chassis.x[V], velocity, controller->getCompleteStand(),
+                                 recorder->translation_source_active_, recorder->translation_ramp_zero_, chassis.dt,
+                                 config.position_release_tau, config.hold_capture_speed, feedback.reference[S]);
   feedback.reference[YAW] += yaw_rate * chassis.dt;
   feedback.output = feedforward - gain * (chassis.x - feedback.reference);
   if (recorder->turn_debug_capture_)

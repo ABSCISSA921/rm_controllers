@@ -91,6 +91,7 @@ protected:
 
 private:
   friend class Normal;
+  bool translation_source_active_{false}, translation_ramp_zero_{true};
   // Fixed recording storage, reset to missing each control call. No control consumers.
   std::atomic<bool> turn_debug_enabled_{false};
   bool turn_debug_capture_{false};

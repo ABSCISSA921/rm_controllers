@@ -2,6 +2,7 @@
 #include <control_toolbox/pid.h>
 #include <hardware_interface/joint_command_interface.h>
 #include "mode_base.h"
+#include "bipedal_wheel_controller/normal_reference.h"
 
 namespace rm_chassis_controllers
 {
@@ -32,6 +33,7 @@ private:
   std::vector<hardware_interface::JointHandle *> joints_;
   std::vector<control_toolbox::Pid *> legs_;
   control_toolbox::Pid *roll_;
-  double length_reference_{.2};
+  lqr10::LengthReference length_reference_;
+  lqr10::LongitudinalReference longitudinal_reference_;
 };
 } // namespace rm_chassis_controllers
