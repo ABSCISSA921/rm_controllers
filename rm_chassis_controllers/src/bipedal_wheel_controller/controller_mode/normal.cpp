@@ -33,8 +33,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     controller->setStateChange(true);
     ROS_INFO("[balance] Enter NORMAL with ten-state feedback");
   }
-  if (static_cast<BipedalController *>(controller)->turn_debug_capture_)
-    static_cast<BipedalController *>(controller)->turn_debug_[182] = jump_phase_;
   if (feedback.faulted)
     return;
   const auto &action = controller->getActionParams();
@@ -67,8 +65,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   }
   if (jump_phase_ != IDLE)
   {
-    if (static_cast<BipedalController *>(controller)->turn_debug_capture_)
-      static_cast<BipedalController *>(controller)->turn_debug_[182] = jump_phase_;
     executeJump(time, period);
     return;
   }
@@ -93,9 +89,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   }
   const bool complete_stand = controller->getCompleteStand();
   const double requested_length = complete_stand ? controller->getLegCmd() : controller->getDefaultLegLength();
-  auto *recorder = static_cast<BipedalController *>(controller);
-  if (recorder->turn_debug_capture_)
-    recorder->turn_debug_[18] = requested_length;
+  auto *bipedal_controller = static_cast<BipedalController *>(controller);
   if (!std::isfinite(requested_length) || requested_length < config.domain.col(0).maxCoeff() ||
       requested_length > config.domain.col(1).minCoeff())
   {
@@ -103,10 +97,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     controller->latchControlFault(lqr10::Reason::OutsideDomain);
     return;
   }
-  // The previous migration gate (.2 rad/.15 rad/.6 rad/s) was a near-static
-  // candidate-admission check. It conflicted with the original StandUp->Normal
-  // handoff. Keep A's action-stage posture meaning and the existing Normal
-  // input/axial-force bounds here.
+  // Keep the original action-stage posture routing, independent of model trim checks.
   auto posture_exit = [&](int mode) {
     requestMode(mode);
     feedback.reason = lqr10::Reason::Posture;
@@ -154,7 +145,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
       return;
     }
   }
-  if (!recorder->updateGroundVelocity())
+  if (!bipedal_controller->updateGroundVelocity())
   {
     reject(lqr10::Reason::InvalidSnapshot);
     return;
@@ -162,11 +153,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   const double circle = chassis.x[lqr10::V] * chassis.x[lqr10::YAW_RATE];
   const double alpha = std::abs(circle) > 10. ? 10. / std::abs(circle) : 1.;
   const double velocity_reference = complete_stand ? alpha * command.x : 0.;
-  if (recorder->turn_debug_capture_)
-  {
-    recorder->turn_debug_[20] = circle;
-    recorder->turn_debug_[21] = alpha;
-  }
   if (!computeFeedback(velocity_reference, alpha * command.z))
     return;
   if (feedback.faulted || !controller->getStateChange())
@@ -179,8 +165,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   // Pass the checked effective target to the existing PID on this cycle.
   // This resets only the unused length generator, not PID/KF/longitudinal history.
   length_reference_.reset(requested_length);
-  if (recorder->turn_debug_capture_)
-    recorder->turn_debug_[19] = length_reference_.position;
   const double current_length = (lp.L0 + rp.L0) / 2.;
   const double roll_force = roll_->computeCommand(-chassis.roll, period);
   const auto &model = controller->getModelParams();
@@ -195,8 +179,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     const double length_error = length_reference_.position - current_length;
     const double length_error_dot = -chassis.dlength.mean();
     double pid = legs_[side]->computeCommand(length_error, length_error_dot, period);
-    if (recorder->turn_debug_capture_)
-      recorder->turn_debug_[59 + side] = pid;
     clamp(pid, -150., 150.);
     const double turning = model->M * circle * pos.L0 / track;
     const double turning_force = side == LEFT ? -turning : turning;
@@ -204,26 +186,12 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     const double roll_component = side == LEFT ? roll_force : -roll_force;
     const double spring_force = -controller->f_spring_force(pos.L0);
     force[side] = pid + turning_force + gravity_force + roll_component + spring_force;
-    if (recorder->turn_debug_capture_)
-    {
-      recorder->turn_debug_[61 + side] = pid;
-      recorder->turn_debug_[63 + side] = turning_force;
-      recorder->turn_debug_[65 + side] = gravity_force;
-      recorder->turn_debug_[67 + side] = roll_component;
-      recorder->turn_debug_[69 + side] = spring_force;
-      recorder->turn_debug_[71 + side] = force[side];
-    }
   }
   if (!force.allFinite())
   {
     controller->latchControlFault(lqr10::Reason::NonfiniteOutput);
     return;
   }
-  force = force.cwiseMax(Eigen::Vector2d::Constant(-config.max_axial_force))
-              .cwiseMin(Eigen::Vector2d::Constant(config.max_axial_force));
-  if (recorder->turn_debug_capture_)
-    for (int i = 0; i < 2; ++i)
-      recorder->turn_debug_[73 + i] = force[i];
   auto map = [&](const lqr10::Input4 &input) {
     double lt[2], rt[2];
     left.vmc->leg_conv(force[0], input[2], lt);
@@ -235,12 +203,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   const auto commands = map(feedback.output);
   for (int i = 0; i < 6; ++i)
     joints_[i]->setCommand(commands[i]);
-  if (recorder->turn_debug_capture_)
-  {
-    recorder->turn_debug_[13] = 1.;
-    for (int i = 0; i < 6; ++i)
-      recorder->turn_debug_[75 + i] = commands[i];
-  }
 }
 
 void Normal::requestMode(int mode)
@@ -286,8 +248,6 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
     // The ground K10 is not used during flight or outside its validated length domain.
     // This is the original action's mechanical PID port, replacing only the old K6 flight row.
     commands[side].torque = thetas_[side]->computeCommand(-pos.theta, period);
-    clamp(commands[side].torque, -controller->getLqrConfig().input_limits[2 + side],
-          controller->getLqrConfig().input_limits[2 + side]);
     leg.vmc->leg_conv(commands[side].force, commands[side].torque, commands[side].input);
   }
   setJointCommands(joints_, commands[0], commands[1]);
@@ -347,12 +307,7 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
   State10 equilibrium;
   if (!lqr10::evaluate(config, chassis.length, gain, feedforward, &equilibrium))
     return reject(Reason::OutsideDomain);
-  if (!std::isfinite(chassis.command_age) || chassis.command_age < 0. ||
-      chassis.command_age > config.max_command_age)
-    return reject(Reason::CommandStale);
-  auto *recorder = static_cast<BipedalController *>(controller);
-  if (recorder->turn_debug_capture_)
-    recorder->turn_debug_[155] = !feedback.reference_valid;
+  auto *bipedal_controller = static_cast<BipedalController *>(controller);
   if (!feedback.reference_valid)
   {
     feedback.reference.setZero();
@@ -368,31 +323,12 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
   feedback.reference[V] = velocity;
   feedback.reference[YAW_RATE] = yaw_rate;
   longitudinal_reference_.update(chassis.x[S], chassis.x[V], velocity, controller->getCompleteStand(),
-                                 recorder->translation_source_active_, recorder->translation_ramp_zero_, chassis.dt,
+                                 bipedal_controller->translation_source_active_, bipedal_controller->translation_ramp_zero_, chassis.dt,
                                  config.position_release_tau, config.hold_capture_speed, feedback.reference[S]);
   feedback.reference[YAW] += yaw_rate * chassis.dt;
   feedback.output = feedforward - gain * (chassis.x - feedback.reference);
-  if (recorder->turn_debug_capture_)
-  {
-    recorder->turn_debug_[12] = 1.;
-    for (int j = 0; j < 10; ++j)
-      recorder->turn_debug_[33 + j] = feedback.reference[j];
-    for (int i = 0; i < 4; ++i)
-    {
-      recorder->turn_debug_[47 + i] = feedback.output[i];
-      recorder->turn_debug_[55 + i] = feedforward[i];
-      // Direct gain samples at 100 Hz for signed same-cycle decomposition.
-      if (recorder->turn_debug_cycle_ % 10 == 0)
-        for (int j = 0; j < 10; ++j)
-          recorder->turn_debug_[115 + 10 * i + j] = gain(i, j);
-    }
-  }
   if (!feedback.output.allFinite())
     return reject(Reason::NonfiniteOutput);
-  feedback.output = feedback.output.cwiseMax(-config.input_limits).cwiseMin(config.input_limits);
-  if (recorder->turn_debug_capture_)
-    for (int i = 0; i < 4; ++i)
-      recorder->turn_debug_[51 + i] = feedback.output[i];
   feedback.active = true;
   feedback.reason = Reason::None;
   return true;

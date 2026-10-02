@@ -3,7 +3,6 @@
 #include <Eigen/Cholesky>
 #include <Eigen/Geometry>
 #include <cmath>
-#include <limits>
 
 namespace rm_chassis_controllers
 {
@@ -61,11 +60,8 @@ bool VelocityKalmanFilter::update(const Input &input, Output &output)
   Eigen::Matrix2d measurement_covariance = Eigen::Matrix2d::Zero();
   measurement_covariance.diagonal() << std::pow(params_.velocity_stddev, 2),
                                       std::pow(params_.acceleration_stddev, 2);
-  Eigen::Vector2d state = observation, predicted = observation;
-  Eigen::Vector2d innovation = Eigen::Vector2d::Constant(std::numeric_limits<double>::quiet_NaN());
-  Eigen::Matrix2d covariance = measurement_covariance, gain = Eigen::Matrix2d::Zero();
-  bool deweighted = false;
-  double velocity_residual = std::numeric_limits<double>::quiet_NaN();
+  Eigen::Vector2d state = observation;
+  Eigen::Matrix2d covariance = measurement_covariance;
   if (initialized_)
   {
     const double dt = input.dt;
@@ -75,18 +71,16 @@ bool VelocityKalmanFilter::update(const Input &input, Output &output)
     process_covariance << dt * dt * dt / 3., dt * dt / 2., dt * dt / 2., dt;
     process_covariance *= params_.jerk_density;
     process_covariance(0, 0) += params_.velocity_process_density * dt;
-    predicted = transition * state_;
+    const Eigen::Vector2d predicted = transition * state_;
     const Eigen::Matrix2d predicted_covariance = transition * covariance_ * transition.transpose() + process_covariance;
-    innovation = observation - predicted;
-    velocity_residual = innovation[0];
-    deweighted = std::abs(velocity_residual) > params_.velocity_residual_threshold;
-    if (deweighted)
+    const Eigen::Vector2d innovation = observation - predicted;
+    if (std::abs(innovation[0]) > params_.velocity_residual_threshold)
       measurement_covariance(0, 0) *= params_.velocity_noise_multiplier;
     const Eigen::Matrix2d innovation_covariance = predicted_covariance + measurement_covariance;
     const Eigen::LDLT<Eigen::Matrix2d> factor(innovation_covariance);
     if (factor.info() != Eigen::Success || !factor.isPositive())
       return false;
-    gain = factor.solve(predicted_covariance.transpose()).transpose();
+    const Eigen::Matrix2d gain = factor.solve(predicted_covariance.transpose()).transpose();
     state = predicted + gain * innovation;
     const Eigen::Matrix2d residual = Eigen::Matrix2d::Identity() - gain;
     covariance = residual * predicted_covariance * residual.transpose() +
@@ -97,24 +91,6 @@ bool VelocityKalmanFilter::update(const Input &input, Output &output)
     return false;
 
   output.velocity = velocity;
-  output.observation_raw = raw;
-  output.observation = observation;
-  output.predicted = predicted;
-  if (!initialized_)
-    output.predicted.setConstant(std::numeric_limits<double>::quiet_NaN()); // No prediction on the seed frame.
-  output.state = state;
-  output.innovation = innovation;
-  output.acceleration_world = acceleration;
-  output.point_velocity_raw = point_forward;
-  output.point_velocity_filtered = point_filtered;
-  output.point_velocity_lateral = point_lateral;
-  output.turning_acceleration = turning_acceleration;
-  output.velocity_variance = measurement_covariance(0, 0);
-  output.velocity_gain = gain(0, 0);
-  output.acceleration_velocity_gain = gain(1, 0);
-  output.velocity_residual = velocity_residual;
-  output.seeded = !initialized_;
-  output.velocity_deweighted = deweighted;
   state_ = state;
   covariance_ = covariance;
   observation_ = observation;

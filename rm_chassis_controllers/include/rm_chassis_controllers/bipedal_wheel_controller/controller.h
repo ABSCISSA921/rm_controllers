@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <rm_msgs/DebugData.h>
 #include <rm_msgs/LegCmd.h>
 #include <rm_msgs/LeggedChassisMode.h>
 #include <rm_msgs/LeggedChassisStatus.h>
@@ -20,7 +19,6 @@
 #include <std_msgs/Float64.h>
 #include <std_msgs/Bool.h>
 #include <std_srvs/Trigger.h>
-#include <array>
 #include <atomic>
 #include <mutex>
 #include <dynamic_reconfigure/server.h>
@@ -85,28 +83,18 @@ public:
 protected:
   bool readVirtualLeg(int side, double pitch_rate, double &carrier_rate);
   bool observe(double pitch_rate, const Eigen::Vector2d &carrier_rates);
-  void validateObservationTime();
   lqr10::Config lqr_config_;
   lqr10::NormalFeedback normal_feedback_;
 
 private:
   friend class Normal;
   bool translation_source_active_{false}, translation_ramp_zero_{true};
-  // Fixed recording storage, reset to missing each control call. No control consumers.
-  std::atomic<bool> turn_debug_enabled_{false};
-  bool turn_debug_capture_{false};
-  std::array<double, 197> turn_debug_{};
-  uint64_t turn_debug_cycle_{0};
-  std::unique_ptr<realtime_tools::RealtimePublisher<rm_msgs::DebugData>> turn_debug_pub_;
-  ros::WallTimer turn_debug_timer_;
-  void publishTurnDebug();
   bool updateEstimation(const ros::Time &time, const ros::Duration &period);
   void resetObservation(const ros::Time &time, const ros::Duration &period);
-  void updateChassisState(const ros::Time &time);
+  void updateChassisState();
   void publishMode();
   void publishCompatibilityStatus();
   ControlParams action_params_;
-  bool spring_compensation_enabled_{false};
   ros::Time start_time_;
   bool command_authorized_{false};
   lqr10::ObservationHistory observation_history_;

@@ -15,7 +15,7 @@ struct LinearModel
 };
 struct DesignReport
 {
-  double care_residual{0.}, minimum_p{0.}, max_real{-1e30}, max_rho{0.};
+  double care_residual{0.}, minimum_p{0.}, max_real{-1e30};
   double fit_error{0.}, equilibrium_error{0.};
   unsigned nodes{0}, validation_points{0};
 };
@@ -23,7 +23,6 @@ Input4 staticFeedforward(const PhysicalModel &);
 State10 staticEquilibrium(const PhysicalModel &, const Eigen::Vector2d &lengths, const Input4 &uff);
 LinearModel linearModel(const PhysicalModel &, const Eigen::Vector2d &lengths);
 Gain10 solveCare(const LinearModel &, const State10 &q, const Input4 &r, DesignReport &);
-void validateSampled(const LinearModel &, const Gain10 &, double dt, DesignReport &);
 GainUpdate designTable(const Config &, const State10 &q, const Input4 &r, DesignReport &);
 bool evaluate(const Config &, const Eigen::Vector2d &lengths, Gain10 &, Input4 &, State10 *equilibrium = nullptr);
 } // namespace lqr10

@@ -34,11 +34,6 @@ public:
   struct Output
   {
     double velocity; // Signed wheel-midpoint speed along current horizontal heading.
-    Eigen::Vector2d observation_raw, observation, predicted, state, innovation;
-    Eigen::Vector3d acceleration_world;
-    double point_velocity_raw, point_velocity_filtered, point_velocity_lateral, turning_acceleration;
-    double velocity_variance, velocity_gain, acceleration_velocity_gain, velocity_residual;
-    bool seeded, velocity_deweighted;
   };
 
   bool configure(const Params &params);

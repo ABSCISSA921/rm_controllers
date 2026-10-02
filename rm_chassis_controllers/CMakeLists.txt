@@ -13,6 +13,7 @@ add_definitions(-Wall -Werror -Wno-enum-compare)
 find_package(catkin REQUIRED
         COMPONENTS
         roscpp
+        rm_msgs
 
         rm_common
 
@@ -22,14 +23,15 @@ find_package(catkin REQUIRED
         nav_msgs
         angles
         dynamic_reconfigure
-        urdf
 )
 
 find_package(Eigen3 REQUIRED)
+# find_package(Boost REQUIRED COMPONENTS filesystem system)
+# find_package(Threads REQUIRED)
 
 generate_dynamic_reconfigure_options(
-  cfg/PowerLimit.cfg
   cfg/LQRWeight.cfg
+  cfg/PowerLimit.cfg
 )
 
 ###################################
@@ -48,6 +50,7 @@ catkin_package(
         LIBRARIES
         CATKIN_DEPENDS
         roscpp
+        rm_msgs
 
         rm_common
 
@@ -56,7 +59,6 @@ catkin_package(
         nav_msgs
         angles
         dynamic_reconfigure
-        urdf
         LIBRARIES ${PROJECT_NAME}
 )
 
@@ -106,9 +108,11 @@ add_library(${PROJECT_NAME}
 ## Specify libraries to link executable targets against
 target_link_libraries(${PROJECT_NAME}
         ${catkin_LIBRARIES}
+        # ${Boost_LIBRARIES}
+        # Threads::Threads
 )
 
-add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg)
+add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg ${catkin_EXPORTED_TARGETS})
 
 #############
 ## Install ##

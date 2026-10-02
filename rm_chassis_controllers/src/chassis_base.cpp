@@ -185,7 +185,7 @@ void ChassisBase<T...>::update(const ros::Time& time, const ros::Duration& perio
   vel_cmd_.z = ramp_w_->output();
 
   moveJoint(time, period);
-  //  powerLimit();
+  powerLimit();
 }
 
 template <typename... T>
@@ -252,7 +252,7 @@ void ChassisBase<T...>::twist(const ros::Time& time, const ros::Duration& period
   }
   catch (tf2::TransformException& ex)
   {
-    //    ROS_WARN("%s", ex.what());
+    ROS_WARN("%s", ex.what());
   }
 }
 
@@ -445,7 +445,7 @@ void ChassisBase<T...>::tfVelToBase(const std::string& from)
   }
   catch (tf2::TransformException& ex)
   {
-    //    ROS_WARN("%s", ex.what());
+    ROS_WARN("%s", ex.what());
   }
 }
 

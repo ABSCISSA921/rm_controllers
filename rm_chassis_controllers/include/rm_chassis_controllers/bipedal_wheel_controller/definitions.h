@@ -43,8 +43,7 @@ enum class Reason
   OutsideDomain = 4,
   Posture = 5,
   NonfiniteOutput = 7,
-  Terminated = 8,
-  CommandStale = 9
+  Terminated = 8
 };
 
 struct PhysicalLeg
@@ -72,11 +71,8 @@ struct Config
   Eigen::Matrix<double, 10, 40> coeffs{Eigen::Matrix<double, 10, 40>::Zero()};
   Eigen::Matrix<double, 2, 2> domain{Eigen::Matrix<double, 2, 2>::Zero()};
   Input4 uff{Input4::Zero()};
-  Input4 input_limits{Input4::Zero()};
-  double dt_min{0.}, dt_max{0.}, wheel_radius{0.};
-  double max_command_age{0.};
-  double max_angle{0.}, max_roll{0.}, max_rate{0.};
-  double max_axial_force{0.};
+  double wheel_radius{0.};
+  double max_angle{0.};
   double length_reference_tau{0.};
   double position_release_tau{0.}, hold_capture_speed{0.};
   PhysicalModel model;
@@ -101,8 +97,7 @@ struct NormalFeedback
   Eigen::Vector2d axial_force{Eigen::Vector2d::Zero()}; // F consumed by VMC and the same status.
   bool active{false}; // Selects Normal U4/F for status publication; does not authorize control.
   bool faulted{false}; // Latched until starting(), including faults outside Normal.
-  Reason reason{Reason::NotNormal}; // Reason reported by the existing diagnostic channel.
-  double last_time{-1.}; // Previous control-call time checked in every mode.
+  Reason reason{Reason::NotNormal}; // Current Normal status or first latched fault cause.
 };
 } // namespace lqr10
 
@@ -211,7 +206,7 @@ struct ChassisState
   // Current whole-body observation, shared by Normal and the original mode interface.
   lqr10::State10 x{lqr10::State10::Zero()};
   Eigen::Vector2d length{Eigen::Vector2d::Zero()}, dlength{Eigen::Vector2d::Zero()};
-  double time{0.}, dt{0.}, command_age{0.};
+  double time{0.}, dt{0.};
   bool valid{false}, raw_valid{false};
 
   // Raw body-frame IMU / wrapped attitude also serve recovery outside the LQR observation range.

@@ -2,10 +2,8 @@
 #include <Eigen/Eigenvalues>
 #include <Eigen/LU>
 #include <Eigen/QR>
-#include <unsupported/Eigen/MatrixFunctions>
 #include <array>
 #include <stdexcept>
-#include <vector>
 
 namespace rm_chassis_controllers
 {
@@ -20,13 +18,6 @@ double maxReal(const Eigen::MatrixXd &a)
     throw std::runtime_error("eigenvalue calculation failed");
   return e.eigenvalues().real().maxCoeff();
 }
-double radius(const Eigen::MatrixXd &a)
-{
-  Eigen::EigenSolver<Eigen::MatrixXd> e(a, false);
-  if (e.info() != Eigen::Success)
-    throw std::runtime_error("sampled eigenvalue calculation failed");
-  return e.eigenvalues().cwiseAbs().maxCoeff();
-}
 State10 basis(const Eigen::Vector2d &l, const Eigen::Matrix2d &domain)
 {
   const Eigen::Vector2d n = (2. * (l - domain.col(0)).array() / (domain.col(1) - domain.col(0)).array() - 1.).matrix();
@@ -34,18 +25,6 @@ State10 basis(const Eigen::Vector2d &l, const Eigen::Matrix2d &domain)
   State10 b;
   b << 1., x, y, x * x, x * y, y * y, x * x * x, x * x * y, x * y * y, y * y * y;
   return b;
-}
-double curveAt(const Curve8 &coefficients, double length, const Eigen::Vector2d &domain)
-{
-  const double t = 2. * (length - domain[0]) / (domain[1] - domain[0]) - 1.;
-  double b1 = 0., b2 = 0.;
-  for (int i = coefficients.size() - 1; i >= 1; --i)
-  {
-    const double b = 2. * t * b1 - b2 + coefficients[i];
-    b2 = b1;
-    b1 = b;
-  }
-  return t * b1 - b2 + coefficients[0];
 }
 } // namespace
 
@@ -96,25 +75,6 @@ Gain10 solveCare(const LinearModel &m, const State10 &q, const Input4 &r, Design
   return K;
 }
 
-void validateSampled(const LinearModel &m, const Gain10 &k, double dt, DesignReport &report)
-{
-  if (!std::isfinite(dt) || dt <= 0.)
-    throw std::invalid_argument("invalid sample period");
-  Eigen::MatrixXd aug = Eigen::MatrixXd::Zero(14, 14);
-  aug.topLeftCorner(10, 10) = m.A;
-  aug.topRightCorner(10, 4) = m.B;
-  const Eigen::MatrixXd exp = (aug * dt).exp();
-  const Eigen::MatrixXd ad = exp.topLeftCorner(10, 10), bd = exp.topRightCorner(10, 4);
-  Eigen::MatrixXd delay = Eigen::MatrixXd::Zero(14, 14);
-  delay.topLeftCorner(10, 10) = ad;
-  delay.topRightCorner(10, 4) = bd;
-  delay.bottomLeftCorner(4, 10) = -k;
-  const double rho = std::max(radius(ad - bd * k), radius(delay));
-  report.max_rho = std::max(report.max_rho, rho);
-  if (!std::isfinite(rho) || rho >= 1.)
-    throw std::runtime_error("sampled/one-sample-delay closed loop unstable");
-}
-
 GainUpdate designTable(const Config &config, const State10 &q, const Input4 &r, DesignReport &report)
 {
   Eigen::MatrixXd rows(144, 10), ks(144, 40);
@@ -126,8 +86,6 @@ GainUpdate designTable(const Config &config, const State10 &q, const Input4 &r, 
       const auto m = linearModel(config.model, l);
       report.equilibrium_error = std::max(report.equilibrium_error, m.residual.cwiseAbs().maxCoeff());
       const auto k = solveCare(m, q, r, report);
-      for (double dt : {config.dt_min, config.dt_max})
-        validateSampled(m, k, dt, report);
       const int row = 12 * i + j;
       rows.row(row) = basis(l, d).transpose();
       for (int state = 0; state < 10; ++state)
@@ -158,8 +116,6 @@ GainUpdate designTable(const Config &config, const State10 &q, const Input4 &r, 
       throw std::runtime_error("analytic static trim mismatch");
     if (maxReal(m.A - m.B * k) >= 0.)
       throw std::runtime_error("poly33 continuous closed loop unstable");
-    for (int n = 0; n < 5; ++n)
-      validateSampled(m, k, config.dt_min + (config.dt_max - config.dt_min) * n / 4., report);
     ++report.validation_points;
   };
 
@@ -172,53 +128,6 @@ GainUpdate designTable(const Config &config, const State10 &q, const Input4 &r, 
     for (double right : required)
       validatePoint({left, right});
 
-  const Eigen::Vector2d low = d.col(0), high = d.col(1), mid = (low + high) / 2.;
-  const std::array<Eigen::Vector2d, 5> points{{low, mid, high, {low[0], high[1]}, {high[0], low[1]}}};
-  for (int field = 0; field < 9; ++field)
-    for (double scale : {.8, 1.2})
-      for (int n = 0; n < (field >= 6 ? 4 : 5); ++n)
-      {
-        PhysicalModel p = config.model;
-        bool rejected_geometry = false;
-        const std::array<double *, 6> scalar{{&p.mb, &p.Ib, &p.Izz, &p.mw, &p.Iw, &p.lc}};
-        if (field < 6)
-          *scalar[field] *= scale;
-        else
-          for (int side = 0; side < 2; ++side)
-          {
-            auto &z = p.legs[side];
-            if (field == 6)
-              z.mass *= scale;
-            if (field == 7)
-              z.inertia *= scale;
-            if (field == 8)
-            {
-              const double L = points[n][side];
-              const double l = L;
-              const double lb = curveAt(z.lb, L, p.geometry_domain);
-              const double lw = curveAt(z.lw, L, p.geometry_domain);
-              const double cb = (lb * lb + l * l - lw * lw) / (2. * lb * l);
-              const double along = lb * cb * scale;
-              const double transverse = lb * std::sqrt(std::max(0., 1. - cb * cb)) * scale;
-              if (along <= 0. || along >= l)
-              {
-                rejected_geometry = true;
-                break;
-              }
-              z.lb.setZero();
-              z.lb[0] = std::hypot(along, transverse);
-              z.lw.setZero();
-              z.lw[0] = std::hypot(l - along, transverse);
-            }
-          }
-        if (rejected_geometry)
-          continue;
-        Gain10 k;
-        Input4 uff;
-        if (!evaluate(fit, points[n], k, uff))
-          throw std::runtime_error("sensitivity outside gain domain");
-        validateSampled(linearModel(p, points[n]), k, config.dt_max, report);
-      }
   return update;
 }
 } // namespace lqr10

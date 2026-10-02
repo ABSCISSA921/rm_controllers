@@ -3,7 +3,6 @@
 //
 
 #include "bipedal_wheel_controller/controller.h"
-#include <limits>
 #include <stdexcept>
 #include <urdf/model.h>
 
@@ -79,29 +78,6 @@ bool BipedalController::init(hardware_interface::RobotHW *robot_hw, ros::NodeHan
   down_5cm_stair_srv_ =
       controller_nh.advertiseService("/down_5cm_stair", &BipedalController::down5cmStairSrvCallback, this);
 
-  controller_nh.param("turn_debug_enabled", turn_debug_capture_, false);
-  turn_debug_enabled_.store(turn_debug_capture_, std::memory_order_relaxed);
-  turn_debug_pub_.reset(new realtime_tools::RealtimePublisher<rm_msgs::DebugData>(controller_nh, "turn_debug", 4));
-  turn_debug_pub_->msg_.name = {"cycle", "time", "dt", "base_mode", "selected_mode", "requested_mode", "complete_before", "complete_after", "raw_valid", "valid", "fault", "reason", "feedback_computed", "feedback_submitted", "roll", "cmd_v", "cmd_r", "leg_cmd", "Ltarget", "Lref", "circle", "alpha", "command_age", "x_0", "x_1", "x_2", "x_3", "x_4", "x_5", "x_6", "x_7", "x_8", "x_9", "xref_0", "xref_1", "xref_2", "xref_3", "xref_4", "xref_5", "xref_6", "xref_7", "xref_8", "xref_9", "L_0", "L_1", "dL_0", "dL_1", "uraw_0", "uraw_1", "uraw_2", "uraw_3", "ulimited_0", "ulimited_1", "ulimited_2", "ulimited_3", "uff_0", "uff_1", "uff_2", "uff_3", "pid_raw_0", "pid_raw_1", "pid_0", "pid_1", "turning_0", "turning_1", "gravity_0", "gravity_1", "roll_force_0", "roll_force_1", "spring_0", "spring_1", "fraw_0", "fraw_1", "flimited_0", "flimited_1", "candidate_0", "candidate_1", "candidate_2", "candidate_3", "candidate_4", "candidate_5", "command_0", "command_1", "command_2", "command_3", "command_4", "command_5", "q_0", "q_1", "q_2", "q_3", "q_4", "q_5", "dq_0", "dq_1", "dq_2", "dq_3", "dq_4", "dq_5", "effort_0", "effort_1", "effort_2", "effort_3", "effort_4", "effort_5", "msg_vx", "msg_vy", "msg_w", "ramp_x", "ramp_y", "follow_error", "follow_pid", "follow_ff", "yaw_pre_ramp", "yaw_post_ramp", "K_0_0", "K_0_1", "K_0_2", "K_0_3", "K_0_4", "K_0_5", "K_0_6", "K_0_7", "K_0_8", "K_0_9", "K_1_0", "K_1_1", "K_1_2", "K_1_3", "K_1_4", "K_1_5", "K_1_6", "K_1_7", "K_1_8", "K_1_9", "K_2_0", "K_2_1", "K_2_2", "K_2_3", "K_2_4", "K_2_5", "K_2_6", "K_2_7", "K_2_8", "K_2_9", "K_3_0", "K_3_1", "K_3_2", "K_3_3", "K_3_4", "K_3_5", "K_3_6", "K_3_7", "K_3_8", "K_3_9", "reference_initialized", "mode_executed", "estimation_computed", "local_theta_0", "local_theta_1"};
-  const std::vector<std::string> velocity_fields = {
-      "v_kin", "v_fused", "kf_updated", "kf_seeded", "kf_innovation_velocity", "kf_innovation_acceleration", "kf_point_velocity_raw",
-      "kf_acc_world_x", "kf_acc_world_y", "kf_acc_world_z", "kf_heading_velocity", "kf_heading_acceleration", "kf_point_velocity_filtered",
-      "imu_acc_base_x", "imu_acc_base_y", "imu_acc_base_z", "imu_gyro_base_x", "imu_gyro_base_y", "imu_gyro_base_z",
-      "wrapped_yaw", "raw_pitch", "kf_update_us", "jump_phase", "kf_attempted",
-      "kf_predicted_velocity", "kf_predicted_acceleration", "kf_velocity_observation_raw", "kf_acceleration_observation_raw",
-      "kf_velocity_observation", "kf_acceleration_observation", "kf_point_velocity_lateral", "kf_turning_acceleration",
-      "kf_velocity_variance", "kf_velocity_gain", "kf_acceleration_velocity_gain", "kf_velocity_deweighted", "kf_velocity_residual"};
-  auto &names = turn_debug_pub_->msg_.name;
-  names.insert(names.end(), velocity_fields.begin(), velocity_fields.end());
-  turn_debug_pub_->msg_.value.resize(turn_debug_.size());
-  turn_debug_pub_->msg_.stamp.resize(turn_debug_.size());
-  turn_debug_timer_ = controller_nh.createWallTimer(ros::WallDuration(.5),
-      [this, controller_nh](const ros::WallTimerEvent &) {
-        bool enabled = false;
-        controller_nh.param("turn_debug_enabled", enabled, false);
-        turn_debug_enabled_.store(enabled, std::memory_order_relaxed);
-      });
-
   configureLqrInterface(controller_nh);
   return true;
 }
@@ -117,17 +93,6 @@ bool BipedalController::down5cmStairSrvCallback(std_srvs::Trigger::Request &req,
 
 void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &period)
 {
-  turn_debug_capture_ = turn_debug_enabled_.load(std::memory_order_relaxed);
-  if (turn_debug_capture_)
-  {
-    turn_debug_.fill(std::numeric_limits<double>::quiet_NaN());
-    turn_debug_[0] = ++turn_debug_cycle_;
-    turn_debug_[1] = time.toSec();
-    turn_debug_[2] = period.toSec();
-    turn_debug_[6] = complete_stand_;
-    turn_debug_[12] = turn_debug_[13] = turn_debug_[156] = turn_debug_[157] = 0.;
-    turn_debug_[162] = turn_debug_[183] = 0.;
-  }
   const bool status_due = time.toSec() - last_status_time_ >= .01 || time.toSec() < last_status_time_;
   if (status_due)
     last_status_time_ = time.toSec();
@@ -140,12 +105,9 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
   }
   auto zero_output = [this, status_due]() {
     finishObservation();
-    if (turn_debug_capture_)
-      turn_debug_[13] = 0.;
     setJointCommands(joint_handles_, {0, 0, {0., 0.}}, {0, 0, {0., 0.}});
     if (status_due)
       publishCompatibilityStatus();
-    publishTurnDebug();
   };
   resetObservation(time, period);
   if (!std::isfinite(period.toSec()) || period.toSec() <= 0.)
@@ -156,15 +118,12 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
   }
   if (!updateEstimation(time, period))
   {
-    validateObservationTime();
     if (command_authorized_)
       latchControlFault(lqr10::Reason::InvalidSnapshot);
     zero_output();
     return;
   }
-  updateChassisState(time);
-  if (turn_debug_capture_)
-    turn_debug_[157] = 1.;
+  updateChassisState();
   if (normal_feedback_.faulted)
   {
     publishMode();
@@ -181,8 +140,6 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
   if (!command_authorized_)
     state_ = rm_msgs::ChassisCmd::FALLEN;
   mode_manager_->route();
-  if (turn_debug_capture_)
-    turn_debug_[4] = balance_mode_;
   publishMode(); // Report the mode selected for this cycle, before execute() can request the next one.
   if (balance_mode_ != NORMAL)
   {
@@ -192,8 +149,6 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
   }
   if (state_ == rm_msgs::ChassisCmd::FALLEN)
   {
-    if (turn_debug_capture_)
-      turn_debug_[156] = 1.;
     mode_manager_->getModeImpl()->execute(time, period);
     zero_output();
     return;
@@ -205,14 +160,6 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
     zero_output();
     return;
   }
-  if ((chassis.command_age < 0. || chassis.command_age > lqr_config_.max_command_age))
-  {
-    latchControlFault(lqr10::Reason::CommandStale);
-    zero_output();
-    return;
-  }
-  if (turn_debug_capture_)
-    turn_debug_[156] = 1.;
   mode_manager_->getModeImpl()->execute(time, period);
   bool finite = true;
   for (const auto *handle : joint_handles_)
@@ -228,53 +175,6 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
   if (status_due)
     publishCompatibilityStatus();
   pubState();
-  publishTurnDebug();
-}
-
-void BipedalController::publishTurnDebug()
-{
-  if (!turn_debug_capture_ || !turn_debug_pub_->trylock())
-    return;
-  turn_debug_[3] = state_;
-  turn_debug_[5] = balance_mode_;
-  turn_debug_[7] = complete_stand_;
-  turn_debug_[10] = normal_feedback_.faulted;
-  turn_debug_[11] = static_cast<int>(normal_feedback_.reason);
-  turn_debug_[15] = vel_cmd_.x;
-  turn_debug_[16] = vel_cmd_.z;
-  turn_debug_[17] = legCmd_;
-  if (turn_debug_[157] == 1.)
-  {
-    turn_debug_[8] = chassis_state_.raw_valid;
-    turn_debug_[9] = chassis_state_.valid;
-    turn_debug_[14] = chassis_state_.roll;
-    turn_debug_[22] = chassis_state_.command_age;
-    if (chassis_state_.valid)
-      for (int i = 0; i < 10; ++i)
-        turn_debug_[23 + i] = chassis_state_.x[i];
-    if (chassis_state_.raw_valid)
-      for (int i = 0; i < 2; ++i)
-      {
-        turn_debug_[43 + i] = chassis_state_.length[i];
-        turn_debug_[45 + i] = chassis_state_.dlength[i];
-        turn_debug_[158 + i] = leg_state_[i].vmc->getPos().theta;
-      }
-  }
-  for (int i = 0; i < 6; ++i)
-  {
-    turn_debug_[81 + i] = joint_handles_[i]->getCommand();
-    turn_debug_[87 + i] = joint_handles_[i]->getPosition();
-    turn_debug_[93 + i] = joint_handles_[i]->getVelocity();
-    turn_debug_[99 + i] = joint_handles_[i]->getEffort();
-  }
-  // Slots 105..114 belonged to ChassisBase instrumentation; leave them missing (NaN).
-  auto &m = turn_debug_pub_->msg_;
-  for (size_t i = 0; i < turn_debug_.size(); ++i)
-  {
-    m.value[i] = turn_debug_[i];
-    m.stamp[i].fromSec(turn_debug_[1]);
-  }
-  turn_debug_pub_->unlockAndPublish();
 }
 
 bool BipedalController::updateEstimation(const ros::Time &time, const ros::Duration &period)
@@ -346,17 +246,6 @@ bool BipedalController::updateEstimation(const ros::Time &time, const ros::Durat
     for (int row = 0; row < 3; ++row)
       for (int col = 0; col < 3; ++col)
         rotation_world_base_(row, col) = rotation[row][col];
-    if (turn_debug_capture_)
-    {
-      turn_debug_[173] = linear_acc_base.x;
-      turn_debug_[174] = linear_acc_base.y;
-      turn_debug_[175] = linear_acc_base.z;
-      turn_debug_[176] = angular_vel_base.x;
-      turn_debug_[177] = angular_vel_base.y;
-      turn_debug_[178] = angular_vel_base.z;
-      turn_debug_[179] = yaw;
-      turn_debug_[180] = pitch;
-    }
   }
   catch (tf2::TransformException &ex)
   {
@@ -403,15 +292,12 @@ void BipedalController::resetObservation(const ros::Time &time, const ros::Durat
   chassis_state_.dlength.setZero();
   chassis_state_.time = time.toSec();
   chassis_state_.dt = period.toSec();
-  chassis_state_.command_age = 0.;
   chassis_state_.valid = chassis_state_.raw_valid = false;
 }
 
-void BipedalController::updateChassisState(const ros::Time &time)
+void BipedalController::updateChassisState()
 {
   auto &chassis = chassis_state_;
-  const Command command = *cmd_rt_buffer_.readFromRT();
-  chassis.command_age = (time - command.stamp_).toSec();
   const double pitch_rate = chassis.angular_vel.y * std::cos(chassis.roll) -
                             chassis.angular_vel.z * std::sin(chassis.roll);
   Eigen::Vector2d carrier_rates;
@@ -441,7 +327,6 @@ void BipedalController::updateChassisState(const ros::Time &time)
       leg_state_[side].posture.rate = chassis.x[lqr10::DTHETA_L + 2 * side];
     }
   }
-  validateObservationTime();
 }
 
 void BipedalController::publishMode()
@@ -662,7 +547,6 @@ bool BipedalController::setupThresholdParams(ros::NodeHandle &controller_nh)
 
 bool BipedalController::setupSpringParams(ros::NodeHandle &controller_nh)
 {
-  controller_nh.param("spring_compensation", spring_compensation_enabled_, false);
   const std::pair<const char *, double *> tbl[] = {
       {"spring_s2", &spring_params_->s2},
       {"spring_s3", &spring_params_->s3},
@@ -704,8 +588,7 @@ void BipedalController::pubLegLenStatus(const bool &upstair_flag)
 
 double BipedalController::f_spring_force(double L0)
 {
-  if (!spring_compensation_enabled_)
-    return 0.;
+  // return 0.;
   return ((2094.45f * L0 - 3091.28f) * L0 + 1408.375f) * L0 - 80.91f;
 }
 
@@ -714,9 +597,8 @@ namespace lqr10
 void Config::validateParameters() const
 {
   if (!uff.allFinite() || !domain.allFinite() ||
-      (domain.col(0).array() <= 0.).any() || (domain.col(1).array() <= domain.col(0).array()).any() ||
-      !input_limits.allFinite() || (input_limits.array() <= 0.).any())
-    throw std::invalid_argument("lqr10: invalid finite matrix/domain/limits");
+      (domain.col(0).array() <= 0.).any() || (domain.col(1).array() <= domain.col(0).array()).any())
+    throw std::invalid_argument("lqr10: invalid finite matrix/domain");
   if (!model.geometry_domain.allFinite() || model.geometry_domain[0] <= 0. ||
       model.geometry_domain[1] <= model.geometry_domain[0])
     throw std::invalid_argument("lqr10: invalid equivalent-leg domain");
@@ -733,21 +615,15 @@ void Config::validateParameters() const
       if (!curve->allFinite())
         throw std::invalid_argument("lqr10: nonfinite equivalent-leg coefficient");
   }
-  const double positive[] = {dt_min,
-                             dt_max,
-                             wheel_radius,
-                             max_command_age,
+  const double positive[] = {wheel_radius,
                              max_angle,
-                             max_roll,
-                             max_rate,
-                             max_axial_force,
                              length_reference_tau,
                              position_release_tau,
                              hold_capture_speed};
   for (double value : positive)
     if (!std::isfinite(value) || value <= 0.)
       throw std::invalid_argument("lqr10: missing/nonpositive numeric contract");
-  if (dt_min > dt_max || max_angle >= 0.5 || max_roll >= 0.5)
+  if (max_angle >= 0.5)
     throw std::invalid_argument("lqr10: inconsistent operating envelope");
 }
 } // namespace lqr10
@@ -761,28 +637,6 @@ void BipedalController::latchControlFault(Reason reason)
   normal_feedback_.active = false;
   normal_feedback_.reason = reason;
   normal_feedback_.output.setZero();
-}
-
-void BipedalController::validateObservationTime()
-{
-  const auto &chassis = chassis_state_;
-  if (normal_feedback_.faulted)
-    return;
-  const double elapsed = chassis.time - normal_feedback_.last_time;
-  const bool valid_time = std::isfinite(chassis.time) && std::isfinite(chassis.dt) &&
-                          chassis.dt >= lqr_config_.dt_min && chassis.dt <= lqr_config_.dt_max &&
-                          (normal_feedback_.last_time < 0. ||
-                           (elapsed >= lqr_config_.dt_min * .99 && elapsed <= lqr_config_.dt_max * 1.01 &&
-                            std::abs(elapsed - chassis.dt) <= std::max(1e-8, chassis.dt * .02)));
-  normal_feedback_.last_time = chassis.time;
-  if (!valid_time)
-  {
-    chassis_state_.valid = false;
-    if (command_authorized_)
-      latchControlFault(Reason::InvalidTime);
-    else
-      normal_feedback_.reason = Reason::InvalidTime;
-  }
 }
 
 bool BipedalController::readVirtualLeg(int side, double pitch_rate, double &carrier_rate)
@@ -867,8 +721,6 @@ bool BipedalController::observe(double pitch_rate, const Eigen::Vector2d &carrie
   history.wrapped_yaw = rpy[2];
   out.x[S] = history.s;
   out.x[V] = v;
-  if (turn_debug_capture_)
-    turn_debug_[160] = v;
   out.x[YAW] = history.yaw;
   out.x[YAW_RATE] = yaw_rate;
   out.x[BODY_PITCH] = rpy[1];
@@ -908,9 +760,6 @@ bool BipedalController::updateGroundVelocity()
   input.kinematic_velocity = chassis.x[lqr10::V];
   input.dt = chassis.dt;
   VelocityKalmanFilter::Output output;
-  const auto begin = turn_debug_capture_ ? ros::WallTime::now() : ros::WallTime();
-  if (turn_debug_capture_)
-    turn_debug_[183] = 1.;
   if (!velocity_kf_.update(input, output))
   {
     chassis.valid = false;
@@ -919,34 +768,6 @@ bool BipedalController::updateGroundVelocity()
   }
   chassis.x[lqr10::V] = output.velocity;
   integrateVelocity();
-  if (turn_debug_capture_)
-  {
-    turn_debug_[161] = output.velocity;
-    turn_debug_[162] = 1.;
-    turn_debug_[163] = output.seeded;
-    turn_debug_[164] = output.innovation[0];
-    turn_debug_[165] = output.innovation[1];
-    turn_debug_[166] = output.point_velocity_raw;
-    for (int axis = 0; axis < 3; ++axis)
-      turn_debug_[167 + axis] = output.acceleration_world[axis];
-    turn_debug_[170] = output.state[0];
-    turn_debug_[171] = output.state[1];
-    turn_debug_[172] = output.point_velocity_filtered;
-    turn_debug_[181] = (ros::WallTime::now() - begin).toSec() * 1e6;
-    for (int axis = 0; axis < 2; ++axis)
-    {
-      turn_debug_[184 + axis] = output.predicted[axis];
-      turn_debug_[186 + axis] = output.observation_raw[axis];
-      turn_debug_[188 + axis] = output.observation[axis];
-    }
-    turn_debug_[190] = output.point_velocity_lateral;
-    turn_debug_[191] = output.turning_acceleration;
-    turn_debug_[192] = output.velocity_variance;
-    turn_debug_[193] = output.velocity_gain;
-    turn_debug_[194] = output.acceleration_velocity_gain;
-    turn_debug_[195] = output.velocity_deweighted;
-    turn_debug_[196] = output.velocity_residual;
-  }
   return true;
 }
 
@@ -1056,11 +877,7 @@ bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, lqr10::Con
       {"lqr_model/wheel/mass", &model.mw},
       {"lqr_model/wheel/spin_inertia", &model.Iw},
       {"lqr_model/leg/mass", &common_leg.mass},
-      {"lqr10/gate/max_command_age", &config.max_command_age},
       {"lqr10/gate/max_angle", &config.max_angle},
-      {"lqr10/gate/max_roll", &config.max_roll},
-      {"lqr10/gate/max_rate", &config.max_rate},
-      {"lqr10/gate/max_axial_force", &config.max_axial_force},
       {"normal_reference/length_tau", &config.length_reference_tau},
       {"normal_reference/position_release_tau", &config.position_release_tau},
       {"normal_reference/hold_capture_speed", &config.hold_capture_speed}};
@@ -1080,16 +897,12 @@ bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, lqr10::Con
     if (!getVectorParam(controller_nh, entry.first, *entry.second))
       return false;
 
-  Eigen::Vector2d length_domain, period_range;
+  Eigen::Vector2d length_domain;
   if (!getVectorParam(controller_nh, "q", config.q) || !getVectorParam(controller_nh, "r", config.r) ||
-      !getVectorParam(controller_nh, "lqr10/length_domain", length_domain) ||
-      !getVectorParam(controller_nh, "lqr10/period_range", period_range) ||
-      !getVectorParam(controller_nh, "lqr10/input_limits", config.input_limits))
+      !getVectorParam(controller_nh, "lqr10/length_domain", length_domain))
     return false;
   config.domain.row(0) = length_domain.transpose();
   config.domain.row(1) = length_domain.transpose();
-  config.dt_min = period_range[0];
-  config.dt_max = period_range[1];
   model.Rw = wheel_radius_;
   model.Rl = 0.5 * chassis_geometry_params_->wheel_track;
   model.geometry_domain = length_domain;
@@ -1126,9 +939,8 @@ bool BipedalController::setupLQR(ros::NodeHandle &controller_nh)
 
     // Publish the complete initial configuration only after successful generation.
     lqr_config_ = config;
-    ROS_INFO("[lqr10] generated from controller source: %u CARE, %u validation points, fit=%g trim=%g pole=%g rho=%g",
-             report.nodes, report.validation_points, report.fit_error, report.equilibrium_error, report.max_real,
-             report.max_rho);
+    ROS_INFO("[lqr10] generated from controller source: %u CARE, %u validation points, fit=%g trim=%g pole=%g",
+             report.nodes, report.validation_points, report.fit_error, report.equilibrium_error, report.max_real);
   }
   catch (const std::exception &ex)
   {
@@ -1190,7 +1002,7 @@ void BipedalController::reconfigCB(LQRWeightConfig &request, uint32_t)
     staged_gain_revision_ = revision;
     accepted_weights_ = request;
     gain_status_ = "validated; pending next controller start (no active table switch)";
-    ROS_INFO("[lqr10] requested=%lu validated: CARE=%g sampled_rho=%g", revision, report.care_residual, report.max_rho);
+    ROS_INFO("[lqr10] requested=%lu validated: CARE=%g pole=%g", revision, report.care_residual, report.max_real);
   }
   catch (const std::exception &error)
   {
