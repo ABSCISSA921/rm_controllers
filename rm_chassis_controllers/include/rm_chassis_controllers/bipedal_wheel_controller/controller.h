@@ -88,6 +88,7 @@ protected:
 
 private:
   friend class Normal;
+  friend class BipedalObservationTest; // Offline regression of the real observation/mode functions.
   bool translation_source_active_{false}, translation_ramp_zero_{true};
   bool updateEstimation(const ros::Time &time, const ros::Duration &period);
   void resetObservation(const ros::Time &time, const ros::Duration &period);

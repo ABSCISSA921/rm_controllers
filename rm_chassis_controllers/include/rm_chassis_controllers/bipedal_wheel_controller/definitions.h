@@ -206,8 +206,9 @@ struct ChassisState
   // Current whole-body observation, shared by Normal and the original mode interface.
   lqr10::State10 x{lqr10::State10::Zero()};
   Eigen::Vector2d length{Eigen::Vector2d::Zero()}, dlength{Eigen::Vector2d::Zero()};
-  double time{0.}, dt{0.};
+  double time{0.}, dt{0.}; // ROS label and host-supplied computation step; not interchangeable clocks.
   bool valid{false}, raw_valid{false};
+  lqr10::Reason observation_reason{lqr10::Reason::InvalidSnapshot};
 
   // Raw body-frame IMU / wrapped attitude also serve recovery outside the LQR observation range.
   geometry_msgs::Vector3 angular_vel;
@@ -215,6 +216,7 @@ struct ChassisState
   double x_vel = 0.0; // Last valid speed for odometry, which runs before the next observation update.
   double recovery_pitch = 0.0, recovery_roll = 0.0, upright_z = 1.0;
   double roll = 0.0;
+  double roll_rate = 0.0; // ZYX Euler derivative, rad/s; valid only with the full observation.
   double pitch = 0.0;
   double yaw = 0.0;
   double yaw_total = 0.0;

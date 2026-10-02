@@ -293,6 +293,8 @@ void BipedalController::resetObservation(const ros::Time &time, const ros::Durat
   chassis_state_.time = time.toSec();
   chassis_state_.dt = period.toSec();
   chassis_state_.valid = chassis_state_.raw_valid = false;
+  chassis_state_.observation_reason = lqr10::Reason::InvalidSnapshot;
+  chassis_state_.roll_rate = 0.;
 }
 
 void BipedalController::updateChassisState()
@@ -690,16 +692,33 @@ bool BipedalController::observe(double pitch_rate, const Eigen::Vector2d &carrie
   const Eigen::Vector3d omega_base(out.angular_vel.x, out.angular_vel.y, out.angular_vel.z);
   const double radius = lqr_config_.wheel_radius, time = out.time, dt = out.dt;
   out.valid = false;
-  if (!wheel_rates.allFinite() || !rpy.allFinite() || !omega_base.allFinite() || !std::isfinite(time) ||
-      !std::isfinite(dt) || dt <= 0. || !std::isfinite(radius) || radius <= 0. || std::abs(rpy[1]) >= 1.2)
-    return false;
-  if (history.initialized &&
-      (time <= history.last_time || std::abs(time - history.last_time - dt) > std::max(1e-8, dt * .02)))
+  out.observation_reason = Reason::InvalidSnapshot;
+  if (!std::isfinite(time) || !std::isfinite(dt) || dt <= 0.)
   {
-    history.initialized = false;
+    out.observation_reason = Reason::InvalidTime;
     return false;
   }
-  const double yaw_rate = (omega_base[1] * std::sin(rpy[0]) + omega_base[2] * std::cos(rpy[0])) / std::cos(rpy[1]);
+  if (!wheel_rates.allFinite() || !carrier_rates.allFinite() || !rpy.allFinite() || !omega_base.allFinite() ||
+      !std::isfinite(pitch_rate) || !std::isfinite(radius) || radius <= 0.)
+    return false;
+  if (std::abs(rpy[1]) >= 1.2)
+  {
+    out.observation_reason = Reason::Posture;
+    return false;
+  }
+  // ROS time labels and the host's computation step have different semantics:
+  // rm_ecat currently supplies a nominal Worker period, not measured elapsed time.
+  // Scheduling jitter (or a forward ROS-clock adjustment) must not invalidate sensors.
+  // A non-advancing ROS label starts a new integration/filter segment only; keep
+  // physical S/yaw and Normal/PID references, and still use the current observation.
+  if (history.initialized && time <= history.last_time)
+  {
+    history.initialized = false;
+    velocity_kf_.reset();
+  }
+  const double lateral_rate = omega_base[1] * std::sin(rpy[0]) + omega_base[2] * std::cos(rpy[0]);
+  const double yaw_rate = lateral_rate / std::cos(rpy[1]);
+  out.roll_rate = omega_base[0] + std::tan(rpy[1]) * lateral_rate;
   double v = 0.;
   for (int side = 0; side < 2; ++side)
     v += radius * (wheel_rates[side] + carrier_rates[side] + pitch_rate) / 2.;
@@ -726,7 +745,9 @@ bool BipedalController::observe(double pitch_rate, const Eigen::Vector2d &carrie
   out.x[BODY_PITCH] = rpy[1];
   out.x[BODY_RATE] = pitch_rate;
   out.roll = rpy[0];
-  out.valid = out.x.allFinite();
+  out.valid = out.x.allFinite() && std::isfinite(out.roll_rate);
+  if (out.valid)
+    out.observation_reason = Reason::None;
   return out.valid;
 }
 // Called only by the ordinary Normal ground branch, before circle and K10.
@@ -763,6 +784,7 @@ bool BipedalController::updateGroundVelocity()
   if (!velocity_kf_.update(input, output))
   {
     chassis.valid = false;
+    chassis.observation_reason = Reason::InvalidSnapshot;
     velocity_kf_.reset();
     return false;
   }
@@ -796,7 +818,12 @@ void BipedalController::finishObservation()
     integrateVelocity();
   }
   if (!chassis_state_.valid || normal_feedback_.faulted)
+  {
+    // A failed observation is a genuine missing integration sample. Do not bridge
+    // it on recovery, or erase the position and unwrapped attitude already known.
+    observation_history_.initialized = false;
     velocity_kf_.reset();
+  }
 }
 
 namespace

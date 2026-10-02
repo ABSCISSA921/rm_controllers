@@ -1,0 +1,5 @@
+<launch>
+  <!-- rostest creates its own master; never reuse an existing master for this test. -->
+  <test test-name="bipedal_observation_test" pkg="rm_chassis_controllers"
+        type="bipedal_observation_test" time-limit="45.0" />
+</launch>

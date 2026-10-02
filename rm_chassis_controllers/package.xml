@@ -15,6 +15,7 @@
     <depend>roscpp</depend>
 
     <depend>rm_common</depend>
+    <depend>rm_msgs</depend>
 
     <depend>controller_interface</depend>
     <depend>effort_controllers</depend>
@@ -26,6 +27,8 @@
 
     <exec_depend>robot_localization</exec_depend>
     <exec_depend>controller_manager</exec_depend>
+
+    <test_depend>rostest</test_depend>
 
     <export>
         <controller_interface plugin="${prefix}/rm_chassis_controllers_plugins.xml"/>

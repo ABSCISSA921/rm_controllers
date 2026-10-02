@@ -146,3 +146,10 @@ install(
 #############
 ## Testing ##
 #############
+if(CATKIN_ENABLE_TESTING)
+  find_package(rostest REQUIRED)
+  add_rostest_gtest(bipedal_observation_test test/bipedal_observation.test test/bipedal_observation_test.cpp)
+  if(TARGET bipedal_observation_test)
+    target_link_libraries(bipedal_observation_test ${PROJECT_NAME} ${catkin_LIBRARIES})
+  endif()
+endif()

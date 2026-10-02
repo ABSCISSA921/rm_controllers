@@ -36,14 +36,22 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   if (feedback.faulted)
     return;
   const auto &action = controller->getActionParams();
-  if (!chassis.valid && chassis.raw_valid)
+  if (!chassis.raw_valid)
   {
-    requestMode(controller->getOverturn() ? RECOVER : PROTECT);
+    reject(lqr10::Reason::InvalidSnapshot);
     return;
   }
   if (controller->getOverturn())
   {
     requestMode(RECOVER);
+    return;
+  }
+  if (!chassis.valid)
+  {
+    // Only an actual posture rejection may select a mechanical recovery action.
+    // Missing/nonnumeric observations use the existing latched zero-output path.
+    reject(chassis.observation_reason == lqr10::Reason::None ? lqr10::Reason::InvalidSnapshot :
+                                                            chassis.observation_reason);
     return;
   }
   if (controller->getDown5cmStairFlag() &&
@@ -166,7 +174,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   // This resets only the unused length generator, not PID/KF/longitudinal history.
   length_reference_.reset(requested_length);
   const double current_length = (lp.L0 + rp.L0) / 2.;
-  const double roll_force = roll_->computeCommand(-chassis.roll, period);
+  const double roll_force = roll_->computeCommand(-chassis.roll, -chassis.roll_rate, period);
   const auto &model = controller->getModelParams();
   const double track = controller->getChassisGeometryParams()->wheel_track;
   auto &force = feedback.axial_force;
@@ -225,7 +233,7 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
   auto &right = controller->getLegState(RIGHT);
   const double length = (left.vmc->getPos().L0 + right.vmc->getPos().L0) / 2.;
   const double gravity = controller->getModelParams()->f_gravity;
-  const double roll_force = roll_->computeCommand(-body.roll, period);
+  const double roll_force = roll_->computeCommand(-body.roll, -body.roll_rate, period);
   LegCommand commands[2]{};
   for (int side = 0; side < 2; ++side)
   {
