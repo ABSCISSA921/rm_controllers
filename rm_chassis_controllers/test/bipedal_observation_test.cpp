@@ -6,7 +6,7 @@
 namespace rm_chassis_controllers
 {
 // Exercise production methods with in-memory handles and a private rostest master.
-// No RobotHW, simulation, bus, or production diagnostic publisher is involved.
+// No RobotHW, simulation, or bus is involved. Status tests use only private ROS topics.
 class BipedalObservationTest : public ::testing::Test
 {
 protected:
@@ -37,7 +37,6 @@ protected:
     auto &config = controller_.lqr_config_;
     config.wheel_radius = .08;
     config.domain << .06, .40, .06, .40;
-    config.max_angle = .2;
     config.position_release_tau = .2;
     config.hold_capture_speed = .1;
     // Simple valid trim and constant gains, only for exercising the real Normal path.
@@ -112,7 +111,129 @@ protected:
     roll_.getCurrentPIDErrors(&p, &i, &d);
     return d;
   }
+
+  uint64_t cycleSeq() const { return controller_.status_cycle_seq_; }
+  void statusSnapshot(const ros::Time &time, rm_msgs::LeggedChassisStatus &chassis, rm_msgs::LeggedLQRStatus &lqr)
+  {
+    ros::NodeHandle nh("~status");
+    // Only the publisher storage is prepared here; all field projection uses production code.
+    controller_.legged_chassis_status_pub_.reset(
+        new realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>(nh, "chassis", 1));
+    controller_.lqr_status_pub_.reset(
+        new realtime_tools::RealtimePublisher<rm_msgs::LeggedLQRStatus>(nh, "lqr", 1));
+    controller_.legged_chassis_status_pub_->msg_.linear_acc_base.resize(3);
+    auto &m = controller_.lqr_status_pub_->msg_;
+    m.left_leg_ref.resize(6);
+    m.right_leg_ref.resize(6);
+    m.left_leg_error.resize(6);
+    m.right_leg_error.resize(6);
+    m.left_leg_u.resize(2);
+    m.right_leg_u.resize(2);
+    m.F_leg.resize(2);
+    m.unstick.resize(2);
+    bool got_chassis = false, got_lqr = false;
+    auto chassis_sub = nh.subscribe<rm_msgs::LeggedChassisStatus>("chassis", 1,
+        [&](const rm_msgs::LeggedChassisStatus::ConstPtr &msg) { chassis = *msg; got_chassis = true; });
+    auto lqr_sub = nh.subscribe<rm_msgs::LeggedLQRStatus>("lqr", 1,
+        [&](const rm_msgs::LeggedLQRStatus::ConstPtr &msg) { lqr = *msg; got_lqr = true; });
+    const auto deadline = ros::WallTime::now() + ros::WallDuration(2.);
+    while ((!got_chassis || !got_lqr) && ros::WallTime::now() < deadline)
+    {
+      controller_.publishCompatibilityStatus(time);
+      ros::spinOnce();
+      ros::WallDuration(.001).sleep();
+    }
+    ASSERT_TRUE(got_chassis);
+    ASSERT_TRUE(got_lqr);
+  }
 };
+
+TEST_F(BipedalObservationTest, StatusReconstructsFullStateReferenceAndErrorWithPitchSigns)
+{
+  static_assert(ros::message_traits::HasHeader<rm_msgs::LeggedChassisStatus>::value, "ROS tools need a leading header");
+  static_assert(ros::message_traits::HasHeader<rm_msgs::LeggedLQRStatus>::value, "ROS tools need a leading header");
+  velocities_[4] = std::numeric_limits<double>::quiet_NaN();
+  invalidCycle(); // Count a real moveJoint call without touching hardware/IMU.
+  state().valid = true;
+  state().x << 1.2, -.3, 7.4, -.8, .11, -.12, .13, -.14, .15, -.16;
+  state().length << .18, .23;
+  state().roll = -.07;
+  state().linear_acc.x = 1.;
+  state().linear_acc.y = -2.;
+  state().linear_acc.z = 9.7;
+  feedback().reference << .9, -.2, 7.1, -.6, .01, -.02, .03, -.04, .05, -.06;
+  feedback().faulted = false;
+  feedback().reference_valid = feedback().active = true;
+  rm_msgs::LeggedChassisStatus c;
+  rm_msgs::LeggedLQRStatus f;
+  const ros::Time time(1790754500, 123456789);
+  statusSnapshot(time, c, f);
+  ASSERT_EQ(c.cycle_seq, cycleSeq());
+  ASSERT_EQ(c.cycle_seq, f.cycle_seq);
+  EXPECT_EQ(c.header.stamp, time);
+  EXPECT_EQ(f.header.stamp, time); // Preserve integer nanoseconds, not a double round-trip.
+  EXPECT_TRUE(f.reference_valid);
+  EXPECT_TRUE(f.normal_active);
+  lqr10::State10 x, ref, error;
+  x << c.x, c.x_dot, c.yaw, c.d_yaw, c.left_leg_theta, c.left_leg_theta_dot,
+       c.right_leg_theta, c.right_leg_theta_dot, -c.pitch, -c.d_pitch;
+  ref << f.left_leg_ref[2], f.left_leg_ref[3], f.yaw_ref, f.yaw_rate_ref,
+         f.left_leg_ref[0], f.left_leg_ref[1], f.right_leg_ref[0], f.right_leg_ref[1],
+         -f.left_leg_ref[4], -f.left_leg_ref[5];
+  error << f.left_leg_error[2], f.left_leg_error[3], c.yaw - f.yaw_ref, c.d_yaw - f.yaw_rate_ref,
+           f.left_leg_error[0], f.left_leg_error[1], f.right_leg_error[0], f.right_leg_error[1],
+           -f.left_leg_error[4], -f.left_leg_error[5];
+  EXPECT_TRUE(x.isApprox(state().x, 1e-14));
+  EXPECT_TRUE(ref.isApprox(feedback().reference, 1e-14));
+  EXPECT_TRUE(error.isApprox(state().x - feedback().reference, 1e-14));
+  EXPECT_DOUBLE_EQ(c.roll, state().roll);
+  EXPECT_DOUBLE_EQ(c.left_leg_length, .18);
+  EXPECT_DOUBLE_EQ(c.right_leg_length, .23);
+  ASSERT_EQ(c.linear_acc_base.size(), 3u);
+  EXPECT_DOUBLE_EQ(c.linear_acc_base[2], 9.7);
+}
+
+TEST_F(BipedalObservationTest, StatusDistinguishesFallbackReferenceFromInactiveOutput)
+{
+  state().valid = true;
+  state().x.setConstant(.2);
+  state().x[lqr10::YAW] = 7.4;
+  state().x[lqr10::YAW_RATE] = -.8;
+  feedback().reference.setConstant(99.); // Old reference must not leak through the invalid flag.
+  feedback().output.setConstant(42.);
+  feedback().axial_force.setConstant(123.);
+  rm_msgs::LeggedChassisStatus c;
+  rm_msgs::LeggedLQRStatus f;
+  statusSnapshot(ros::Time(10.), c, f);
+  EXPECT_FALSE(f.reference_valid);
+  EXPECT_FALSE(f.normal_active);
+  EXPECT_DOUBLE_EQ(f.yaw_ref, c.yaw);
+  EXPECT_DOUBLE_EQ(f.yaw_rate_ref, c.d_yaw);
+  for (double e : f.left_leg_error) EXPECT_DOUBLE_EQ(e, 0.);
+  for (double u : f.left_leg_u) EXPECT_DOUBLE_EQ(u, 0.);
+  for (double force : f.F_leg) EXPECT_DOUBLE_EQ(force, 0.);
+  feedback().reference_valid = true; // A retained reference alone does not imply active U/F.
+  statusSnapshot(ros::Time(11.), c, f);
+  EXPECT_TRUE(f.reference_valid);
+  EXPECT_FALSE(f.normal_active);
+  EXPECT_DOUBLE_EQ(f.yaw_ref, 99.);
+  EXPECT_DOUBLE_EQ(f.yaw_rate_ref, 99.);
+  for (double u : f.left_leg_u) EXPECT_DOUBLE_EQ(u, 0.);
+}
+
+TEST_F(BipedalObservationTest, StatusCycleCountsSkippedCallsAndSurvivesStopStart)
+{
+  velocities_[4] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_EQ(cycleSeq(), 0u);
+  invalidCycle();
+  invalidCycle(); // Same ROS time and no published status, still a new control cycle.
+  EXPECT_EQ(cycleSeq(), 2u);
+  controller_.stopping(ros::Time(11.));
+  restart();
+  EXPECT_EQ(cycleSeq(), 2u);
+  invalidCycle(); // ROS label 10 is now older than starting's label 20.
+  EXPECT_EQ(cycleSeq(), 3u);
+}
 
 TEST_F(BipedalObservationTest, JitterKeepsNormalReferencePidAndIntegration)
 {

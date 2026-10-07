@@ -72,7 +72,6 @@ struct Config
   Eigen::Matrix<double, 2, 2> domain{Eigen::Matrix<double, 2, 2>::Zero()};
   Input4 uff{Input4::Zero()};
   double wheel_radius{0.};
-  double max_angle{0.};
   double length_reference_tau{0.};
   double position_release_tau{0.}, hold_capture_speed{0.};
   PhysicalModel model;

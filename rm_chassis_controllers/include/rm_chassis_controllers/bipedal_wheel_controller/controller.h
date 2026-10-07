@@ -94,7 +94,7 @@ private:
   void resetObservation(const ros::Time &time, const ros::Duration &period);
   void updateChassisState();
   void publishMode();
-  void publishCompatibilityStatus();
+  void publishCompatibilityStatus(const ros::Time &time);
   ControlParams action_params_;
   ros::Time start_time_;
   bool command_authorized_{false};
@@ -181,6 +181,7 @@ private:
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedLQRStatus>> lqr_status_pub_;
   ros::Time cmd_update_time_;
   double last_status_time_{-1.};
+  uint64_t status_cycle_seq_{0}; // Per controller instance; deliberately retained across stop/start.
   ros::ServiceServer down_5cm_stair_srv_;
 };
 } // namespace rm_chassis_controllers

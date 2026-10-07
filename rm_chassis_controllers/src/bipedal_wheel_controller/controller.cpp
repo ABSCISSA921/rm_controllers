@@ -93,6 +93,7 @@ bool BipedalController::down5cmStairSrvCallback(std_srvs::Trigger::Request &req,
 
 void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &period)
 {
+  ++status_cycle_seq_;
   const bool status_due = time.toSec() - last_status_time_ >= .01 || time.toSec() < last_status_time_;
   if (status_due)
     last_status_time_ = time.toSec();
@@ -103,11 +104,11 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
     jumpCmd_ = leg_setpoint.jump;
     last_leg_setpoint_ = leg_setpoint.received;
   }
-  auto zero_output = [this, status_due]() {
+  auto zero_output = [this, status_due, &time]() {
     finishObservation();
     setJointCommands(joint_handles_, {0, 0, {0., 0.}}, {0, 0, {0., 0.}});
     if (status_due)
-      publishCompatibilityStatus();
+      publishCompatibilityStatus(time);
   };
   resetObservation(time, period);
   if (!std::isfinite(period.toSec()) || period.toSec() <= 0.)
@@ -173,7 +174,7 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
   }
   finishObservation();
   if (status_due)
-    publishCompatibilityStatus();
+    publishCompatibilityStatus(time);
   pubState();
 }
 
@@ -343,12 +344,14 @@ void BipedalController::publishMode()
   }
 }
 
-void BipedalController::publishCompatibilityStatus()
+void BipedalController::publishCompatibilityStatus(const ros::Time &time)
 {
   const auto &x = chassis_state_.x;
   if (chassis_state_.valid && legged_chassis_status_pub_->trylock())
   {
     auto &m = legged_chassis_status_pub_->msg_;
+    m.header.stamp = time;
+    m.cycle_seq = status_cycle_seq_;
     m.roll = chassis_state_.roll;
     m.pitch = -x[lqr10::BODY_PITCH];
     m.d_pitch = -x[lqr10::BODY_RATE];
@@ -373,6 +376,12 @@ void BipedalController::publishCompatibilityStatus()
     // [theta, dtheta, s, v, negative ROS pitch, negative ROS pitch rate].
     auto &m = lqr_status_pub_->msg_;
     const auto &f = normal_feedback_;
+    m.header.stamp = time;
+    m.cycle_seq = status_cycle_seq_;
+    m.normal_active = f.active;
+    m.reference_valid = f.reference_valid;
+    m.yaw_ref = f.reference_valid ? f.reference[lqr10::YAW] : x[lqr10::YAW];
+    m.yaw_rate_ref = f.reference_valid ? f.reference[lqr10::YAW_RATE] : x[lqr10::YAW_RATE];
     for (int side = 0; side < 2; ++side)
     {
       const int index[] = {lqr10::THETA_L + 2 * side, lqr10::DTHETA_L + 2 * side, lqr10::S, lqr10::V, lqr10::BODY_PITCH,
@@ -618,15 +627,12 @@ void Config::validateParameters() const
         throw std::invalid_argument("lqr10: nonfinite equivalent-leg coefficient");
   }
   const double positive[] = {wheel_radius,
-                             max_angle,
                              length_reference_tau,
                              position_release_tau,
                              hold_capture_speed};
   for (double value : positive)
     if (!std::isfinite(value) || value <= 0.)
       throw std::invalid_argument("lqr10: missing/nonpositive numeric contract");
-  if (max_angle >= 0.5)
-    throw std::invalid_argument("lqr10: inconsistent operating envelope");
 }
 } // namespace lqr10
 
@@ -904,7 +910,6 @@ bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, lqr10::Con
       {"lqr_model/wheel/mass", &model.mw},
       {"lqr_model/wheel/spin_inertia", &model.Iw},
       {"lqr_model/leg/mass", &common_leg.mass},
-      {"lqr10/gate/max_angle", &config.max_angle},
       {"normal_reference/length_tau", &config.length_reference_tau},
       {"normal_reference/position_release_tau", &config.position_release_tau},
       {"normal_reference/hold_capture_speed", &config.hold_capture_speed}};

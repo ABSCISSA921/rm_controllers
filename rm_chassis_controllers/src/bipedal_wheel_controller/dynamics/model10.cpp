@@ -177,8 +177,8 @@ LinearModel linearModel(const PhysicalModel &p, const Eigen::Vector2d &lengths)
   q[2] = model.equilibrium[THETA_L];
   q[3] = model.equilibrium[THETA_R];
   const auto base = residual(p, legs, q, zero, zero, model.uff);
-  if (base.cwiseAbs().maxCoeff() > 1e-8 || q.segment<2>(2).cwiseAbs().maxCoeff() >= .2)
-    throw std::invalid_argument("static equilibrium residual/outside model envelope");
+  if (base.cwiseAbs().maxCoeff() > 1e-8)
+    throw std::invalid_argument("static equilibrium residual too large");
   Eigen::Matrix<double, 5, 5> M, Dq, T = Eigen::Matrix<double, 5, 5>::Identity();
   Eigen::Matrix<double, 5, 4> Bu;
   for (int i = 0; i < 5; ++i)
@@ -232,8 +232,6 @@ bool evaluate(const Config &config, const Eigen::Vector2d &lengths, Gain10 &gain
   try
   {
     const State10 eq = staticEquilibrium(config.model, lengths, config.uff);
-    if (eq.cwiseAbs().maxCoeff() >= config.max_angle)
-      return false;
     if (equilibrium)
       *equilibrium = eq;
   }
