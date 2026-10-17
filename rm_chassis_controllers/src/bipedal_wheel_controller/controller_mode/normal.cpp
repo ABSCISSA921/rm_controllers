@@ -14,7 +14,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
 {
   auto &feedback = controller->getNormalFeedback();
   const auto &chassis = controller->getChassisState();
-  const auto &config = controller->getLqrConfig();
   auto &left = controller->getLegState(LEFT);
   auto &right = controller->getLegState(RIGHT);
   const auto &lp = left.vmc->getPos();
@@ -29,35 +28,19 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
       pid->reset();
     feedback.active = false;
     feedback.reference_valid = false;
-    feedback.reason = lqr10::Reason::NotNormal;
     controller->setStateChange(true);
     ROS_INFO("[balance] Enter NORMAL with ten-state feedback");
   }
-  if (feedback.faulted)
-    return;
   const auto &action = controller->getActionParams();
-  if (!chassis.raw_valid)
-  {
-    reject(lqr10::Reason::InvalidSnapshot);
-    return;
-  }
   if (controller->getOverturn())
   {
     requestMode(RECOVER);
     return;
   }
-  if (!chassis.valid)
-  {
-    // Only an actual posture rejection may select a mechanical recovery action.
-    // Missing/nonnumeric observations use the existing latched zero-output path.
-    reject(chassis.observation_reason == lqr10::Reason::None ? lqr10::Reason::InvalidSnapshot :
-                                                            chassis.observation_reason);
-    return;
-  }
   if (controller->getDown5cmStairFlag() &&
-      (std::abs(chassis.x[lqr10::BODY_PITCH]) > action.down5cmStairPitchThreshold ||
-       std::abs(chassis.x[lqr10::THETA_L]) > action.down5cmStairThetaThreshold ||
-       std::abs(chassis.x[lqr10::THETA_R]) > action.down5cmStairThetaThreshold))
+      (std::abs(chassis.x[BODY_PITCH]) > action.down5cmStairPitchThreshold ||
+       std::abs(chassis.x[THETA_L]) > action.down5cmStairThetaThreshold ||
+       std::abs(chassis.x[THETA_R]) > action.down5cmStairThetaThreshold))
   {
     controller->setDown5cmStairFlag(false);
     requestMode(SIT_DOWN);
@@ -79,18 +62,17 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   const auto command = controller->getVelCmd();
   // Original automatic stair trigger, evaluated before ground-LQR feedback.
   if (controller->getCompleteStand() &&
-      std::abs((chassis.x[lqr10::THETA_L] + chassis.x[lqr10::THETA_R]) / 2.) > .50 && std::abs(command.x) > .1 &&
-      std::abs(chassis.x[lqr10::V]) > .1 && (lp.L0 + rp.L0) / 2. > .30 && controller->getLegCmd() > .30)
+      std::abs((chassis.x[THETA_L] + chassis.x[THETA_R]) / 2.) > .50 && std::abs(command.x) > .1 &&
+      std::abs(chassis.x[V]) > .1 && (lp.L0 + rp.L0) / 2. > .30 && controller->getLegCmd() > .30)
   {
     controller->pubLegLenStatus(false);
     requestMode(UPSTAIRS);
     return;
   }
   // Match A's action-stage condition exactly: abs(theta_L + theta_R) / 2,
-  // rather than the mean of the two angle magnitudes. Independent posture
-  // protection remains in computeFeedback().
-  if (!controller->getCompleteStand() && chassis.valid && std::abs(chassis.x[lqr10::BODY_PITCH]) < .2 &&
-      std::abs(chassis.x[lqr10::THETA_L] + chassis.x[lqr10::THETA_R]) / 2. < .2)
+  // rather than the mean of the two angle magnitudes.
+  if (!controller->getCompleteStand() && std::abs(chassis.x[BODY_PITCH]) < .2 &&
+      std::abs(chassis.x[THETA_L] + chassis.x[THETA_R]) / 2. < .2)
   {
     controller->setCompleteStand(true);
     ROS_INFO("[balance] Original Normal standing condition reached");
@@ -98,80 +80,62 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   const bool complete_stand = controller->getCompleteStand();
   const double requested_length = complete_stand ? controller->getLegCmd() : controller->getDefaultLegLength();
   auto *bipedal_controller = static_cast<BipedalController *>(controller);
-  if (!std::isfinite(requested_length) || requested_length < config.domain.col(0).maxCoeff() ||
-      requested_length > config.domain.col(1).minCoeff())
-  {
-    ROS_ERROR("[balance] Normal leg command is outside the loaded gain domain");
-    controller->latchControlFault(lqr10::Reason::OutsideDomain);
-    return;
-  }
   // Keep the original action-stage posture routing, independent of model trim checks.
-  auto posture_exit = [&](int mode) {
-    requestMode(mode);
-    feedback.reason = lqr10::Reason::Posture;
-  };
-  if (std::abs(chassis.x[lqr10::THETA_L]) > 1.0)
+  if (std::abs(chassis.x[THETA_L]) > 1.0)
   {
-    posture_exit(SIT_DOWN);
+    requestMode(SIT_DOWN);
     return;
   }
-  if (std::abs(chassis.x[lqr10::THETA_R]) > 1.0)
+  if (std::abs(chassis.x[THETA_R]) > 1.0)
   {
-    posture_exit(SIT_DOWN);
+    requestMode(SIT_DOWN);
     return;
   }
-  if (std::abs(chassis.x[lqr10::BODY_PITCH]) > .6)
+  if (std::abs(chassis.x[BODY_PITCH]) > .6)
   {
-    posture_exit(SIT_DOWN);
+    requestMode(SIT_DOWN);
     return;
   }
   if (std::abs(chassis.roll) > .8)
   {
-    posture_exit(SIT_DOWN);
+    requestMode(SIT_DOWN);
     return;
   }
   if (requested_length < .22)
   {
-    if (std::abs(chassis.x[lqr10::THETA_L]) > 1.0)
+    if (std::abs(chassis.x[THETA_L]) > 1.0)
     {
-      posture_exit(PROTECT);
+      requestMode(PROTECT);
       return;
     }
-    if (std::abs(chassis.x[lqr10::THETA_R]) > 1.0)
+    if (std::abs(chassis.x[THETA_R]) > 1.0)
     {
-      posture_exit(PROTECT);
+      requestMode(PROTECT);
       return;
     }
-    if (std::abs(chassis.x[lqr10::BODY_PITCH]) > .4)
+    if (std::abs(chassis.x[BODY_PITCH]) > .4)
     {
-      posture_exit(PROTECT);
+      requestMode(PROTECT);
       return;
     }
     if (std::abs(chassis.roll) > .4)
     {
-      posture_exit(PROTECT);
+      requestMode(PROTECT);
       return;
     }
   }
-  if (!bipedal_controller->updateGroundVelocity())
-  {
-    reject(lqr10::Reason::InvalidSnapshot);
-    return;
-  }
-  const double circle = chassis.x[lqr10::V] * chassis.x[lqr10::YAW_RATE];
+  bipedal_controller->updateGroundVelocity();
+  const double circle = chassis.x[V] * chassis.x[YAW_RATE];
   const double alpha = std::abs(circle) > 10. ? 10. / std::abs(circle) : 1.;
   const double velocity_reference = complete_stand ? alpha * command.x : 0.;
-  if (!computeFeedback(velocity_reference, alpha * command.z))
-    return;
-  if (feedback.faulted || !controller->getStateChange())
-    return;
+  computeFeedback(velocity_reference, alpha * command.z);
   // Second-order length shaping is inactive; retain the former path for reference.
   // if (complete_stand)
   //   length_reference_.update(requested_length, chassis.dt, config.length_reference_tau);
   // else
   //   length_reference_.reset(requested_length);
-  // Pass the checked effective target to the existing PID on this cycle.
-  // This resets only the unused length generator, not PID/KF/longitudinal history.
+  // Pass the effective target to the existing PID on this cycle.
+  // This resets only the unused length generator.
   length_reference_.reset(requested_length);
   const double current_length = (lp.L0 + rp.L0) / 2.;
   const double roll_force = roll_->computeCommand(-chassis.roll, -chassis.roll_rate, period);
@@ -195,16 +159,11 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     const double spring_force = -controller->f_spring_force(pos.L0);
     force[side] = pid + turning_force + gravity_force + roll_component + spring_force;
   }
-  if (!force.allFinite())
-  {
-    controller->latchControlFault(lqr10::Reason::NonfiniteOutput);
-    return;
-  }
-  auto map = [&](const lqr10::Input4 &input) {
+  auto map = [&](const Input4 &input) {
     double lt[2], rt[2];
     left.vmc->leg_conv(force[0], input[2], lt);
     right.vmc->leg_conv(force[1], input[3], rt);
-    lqr10::Joint6 out;
+    Joint6 out;
     out << lt[0], lt[1], rt[0], rt[1], input[0], input[1];
     return out;
   };
@@ -215,6 +174,11 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
 
 void Normal::requestMode(int mode)
 {
+  // All Normal action exits occur before the ground KF/feedback branch.
+  auto* bipedal_controller = static_cast<BipedalController*>(controller);
+  bipedal_controller->integrateVelocity();
+  if (mode == PROTECT || mode == SIT_DOWN)
+    bipedal_controller->chassis_state_.x[S] = 0.;
   auto &result = controller->getNormalFeedback();
   result.active = result.reference_valid = false;
   controller->setMode(mode);
@@ -227,6 +191,7 @@ void Normal::requestMode(int mode)
 }
 void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
 {
+  static_cast<BipedalController *>(controller)->integrateVelocity();
   const auto &action = controller->getActionParams();
   const auto &body = controller->getChassisState();
   auto &left = controller->getLegState(LEFT);
@@ -253,7 +218,7 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
       force = -action.off_ground_force * (1. - 3. * flipped * flipped + 2. * flipped * flipped * flipped);
     }
     commands[side].force = force - controller->f_spring_force(pos.L0);
-    // The ground K10 is not used during flight or outside its validated length domain.
+    // The ground K10 is not used during the jump action.
     // This is the original action's mechanical PID port, replacing only the old K6 flight row.
     commands[side].torque = thetas_[side]->computeCommand(-pos.theta, period);
     leg.vmc->leg_conv(commands[side].force, commands[side].torque, commands[side].input);
@@ -285,61 +250,32 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
   }
 }
 
-using namespace lqr10;
-bool Normal::reject(Reason reason)
-{
-  auto &feedback = controller->getNormalFeedback();
-  feedback.active = false;
-  if (reason == Reason::Posture)
-  {
-    requestMode(controller->getOverturn() ? RECOVER : PROTECT);
-    feedback.reason = reason;
-  }
-  else
-    controller->latchControlFault(reason);
-  return false;
-}
-
-bool Normal::computeFeedback(double velocity, double yaw_rate)
+void Normal::computeFeedback(double velocity, double yaw_rate)
 {
   auto &feedback = controller->getNormalFeedback();
   const auto &chassis = controller->getChassisState();
   const auto &config = controller->getLqrConfig();
-  if (feedback.faulted)
-    return false;
-  if (!chassis.valid || !chassis.x.allFinite() || !chassis.length.allFinite() || !chassis.dlength.allFinite() ||
-      !std::isfinite(chassis.roll) || !std::isfinite(velocity) || !std::isfinite(yaw_rate))
-    return reject(Reason::InvalidSnapshot);
   Gain10 gain;
   Input4 feedforward;
   State10 equilibrium;
-  if (!lqr10::evaluate(config, chassis.length, gain, feedforward, &equilibrium))
-    return reject(Reason::OutsideDomain);
+  evaluate(config, chassis.length, gain, feedforward, &equilibrium);
   auto *bipedal_controller = static_cast<BipedalController *>(controller);
   if (!feedback.reference_valid)
   {
     feedback.reference.setZero();
-    feedback.reference[S] = chassis.x[S];
+    bipedal_controller->chassis_state_.x[S] = 0.;
     feedback.reference[YAW] = chassis.x[YAW];
     feedback.reference_valid = true;
-    longitudinal_reference_.reset(controller->getCompleteStand());
   }
   // Absolute physical angles remain in the observation. Only the commanded static
-  // equilibrium is scheduled; s/yaw history is initialized once per Normal entry.
+  // equilibrium is scheduled; S is cleared and yaw reference initialized on Normal entry.
   for (int i : {THETA_L, THETA_R, BODY_PITCH})
     feedback.reference[i] = equilibrium[i];
   feedback.reference[V] = velocity;
   feedback.reference[YAW_RATE] = yaw_rate;
-  longitudinal_reference_.update(chassis.x[S], chassis.x[V], velocity, controller->getCompleteStand(),
-                                 bipedal_controller->translation_source_active_, bipedal_controller->translation_ramp_zero_, chassis.dt,
-                                 config.position_release_tau, config.hold_capture_speed, feedback.reference[S]);
   feedback.reference[YAW] += yaw_rate * chassis.dt;
   feedback.output = feedforward - gain * (chassis.x - feedback.reference);
-  if (!feedback.output.allFinite())
-    return reject(Reason::NonfiniteOutput);
   feedback.active = true;
-  feedback.reason = Reason::None;
-  return true;
 }
 
 } // namespace rm_chassis_controllers

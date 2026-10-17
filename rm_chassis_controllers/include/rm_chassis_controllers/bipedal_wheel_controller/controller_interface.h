@@ -13,9 +13,8 @@ class BipedalControllerInterface
 {
 public:
   virtual ~BipedalControllerInterface() = default;
-  virtual const lqr10::Config &getLqrConfig() const = 0;
-  virtual lqr10::NormalFeedback &getNormalFeedback() = 0;
-  virtual void latchControlFault(lqr10::Reason reason) = 0;
+  virtual const Config &getLqrConfig() const = 0;
+  virtual NormalFeedback &getNormalFeedback() = 0;
 
   virtual const ControlParams &getActionParams() const = 0;
   virtual int getBalanceMode() const = 0;

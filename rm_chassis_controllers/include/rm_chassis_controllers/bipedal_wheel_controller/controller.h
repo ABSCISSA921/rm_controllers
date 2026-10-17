@@ -20,7 +20,6 @@
 #include <std_msgs/Bool.h>
 #include <std_srvs/Trigger.h>
 #include <atomic>
-#include <mutex>
 #include <dynamic_reconfigure/server.h>
 #include <rm_chassis_controllers/LQRWeightConfig.h>
 #include "bipedal_wheel_controller/dynamics/model10.h"
@@ -43,16 +42,14 @@ class BipedalController : public ChassisBase<rm_control::RobotStateInterface, ha
 {
 public:
   BipedalController() = default;
-  const lqr10::Config &getLqrConfig() const override { return lqr_config_; }
-  lqr10::NormalFeedback &getNormalFeedback() override { return normal_feedback_; }
-  void latchControlFault(lqr10::Reason reason) override;
+  const Config &getLqrConfig() const override { return lqr_config_; }
+  NormalFeedback &getNormalFeedback() override { return normal_feedback_; }
   const ControlParams &getActionParams() const override { return action_params_; }
   int getBalanceMode() const override { return balance_mode_; }
   bool init(hardware_interface::RobotHW *robot_hw, ros::NodeHandle &root_nh, ros::NodeHandle &controller_nh) override;
   void moveJoint(const ros::Time &time, const ros::Duration &period) override;
   void starting(const ros::Time &time) override;
   void stopping(const ros::Time &time) override;
-  // clang-format off
   // BipedalControllerInterface implementations
   bool getOverturn() const override { return overturn_; }
   bool getStateChange() const override { return balance_state_changed_; }
@@ -79,55 +76,37 @@ public:
   void pubLegLenStatus(const bool& upstair_flag) override;
   void setRecoveryLegSpdTurnback(bool recovery_leg_spd_turnback) override { recovery_leg_spd_turnback_ = recovery_leg_spd_turnback; }
   bool getRecoveryLegSpdTurnback() const override { return recovery_leg_spd_turnback_.load(std::memory_order_acquire);}
-  // clang-format on
 protected:
-  bool readVirtualLeg(int side, double pitch_rate, double &carrier_rate);
-  bool observe(double pitch_rate, const Eigen::Vector2d &carrier_rates);
-  lqr10::Config lqr_config_;
-  lqr10::NormalFeedback normal_feedback_;
+  void readVirtualLeg(int side, double pitch_rate, double &carrier_rate);
+  void observe(double pitch_rate, const Eigen::Vector2d &carrier_rates);
+  Config lqr_config_;
+  NormalFeedback normal_feedback_;
 
 private:
   friend class Normal;
   friend class BipedalObservationTest; // Offline regression of the real observation/mode functions.
-  bool translation_source_active_{false}, translation_ramp_zero_{true};
-  bool updateEstimation(const ros::Time &time, const ros::Duration &period);
-  void resetObservation(const ros::Time &time, const ros::Duration &period);
+  void updateEstimation(const ros::Time &time, const ros::Duration &period);
   void updateChassisState();
   void publishMode();
   void publishCompatibilityStatus(const ros::Time &time);
   ControlParams action_params_;
-  ros::Time start_time_;
-  bool command_authorized_{false};
-  lqr10::ObservationHistory observation_history_;
   VelocityKalmanFilter velocity_kf_;
   Eigen::Matrix3d rotation_world_base_{Eigen::Matrix3d::Identity()};
   Eigen::Vector3d imu_position_base_{Eigen::Vector3d::Zero()}, hip_midpoint_base_{Eigen::Vector3d::Zero()};
-  bool velocity_integrated_{false}; // Exactly one S/last_v update per valid observation.
-  bool setupVelocityEstimator(ros::NodeHandle &controller_nh);
-  bool updateGroundVelocity();
+  void setupVelocityEstimator(ros::NodeHandle &controller_nh);
+  void updateGroundVelocity();
   void integrateVelocity();
-  void finishObservation();
 
   bool setupParams(ros::NodeHandle &controller_nh);
-  bool loadLqrParams(ros::NodeHandle &controller_nh, lqr10::Config &config);
+  bool loadLqrParams(ros::NodeHandle &controller_nh, Config &config);
   bool setupLQR(ros::NodeHandle &controller_nh);
-  lqr10::GainUpdate polyfit(const lqr10::State10 &q, const lqr10::Input4 &r, lqr10::DesignReport &report) const;
+  GainUpdate polyfit(const State10 &q, const Input4 &r, DesignReport &report) const;
   void reconfigCB(LQRWeightConfig &config, uint32_t level);
-  void publishGainStatus(const ros::TimerEvent &);
   void configureLqrInterface(ros::NodeHandle &controller_nh);
-  lqr10::Config design_config_; // Immutable non-RT model/domain/gates after init.
-  realtime_tools::RealtimeBuffer<lqr10::GainUpdate> gain_update_buffer_;
-  std::atomic<bool> control_running_{false};
-  std::atomic<uint64_t> applied_gain_revision_{0};
-  uint64_t requested_gain_revision_{0};
-  std::mutex gain_callback_mutex_;
-  boost::recursive_mutex gain_server_mutex_;
-  uint64_t staged_gain_revision_{0};
+  Config design_config_; // Immutable non-RT model/domain after init.
+  realtime_tools::RealtimeBuffer<GainUpdate> gain_update_buffer_;
   bool first_reconfigure_{true};
-  LQRWeightConfig accepted_weights_;
-  std::string gain_status_{"initialized"};
   std::unique_ptr<dynamic_reconfigure::Server<LQRWeightConfig>> lqr_server_;
-  ros::Timer gain_status_timer_;
   bool setupModelParams(ros::NodeHandle &controller_nh);
   bool setupThresholdParams(ros::NodeHandle &controller_nh);
   bool setupSpringParams(ros::NodeHandle &controller_nh);

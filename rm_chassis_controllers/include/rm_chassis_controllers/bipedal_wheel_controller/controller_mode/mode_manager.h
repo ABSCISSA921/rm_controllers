@@ -25,7 +25,7 @@ public:
   virtual ~ModeManager() = default;
   void route();
   void reset() { recovery_requested_ = false; }
-  void switchMode(int mode) { mode_impl = mode_map_.at(mode); }
+  void switchMode(int mode) { mode_impl = mode_map_[mode]; }
   const std::shared_ptr<ModeBase> &getModeImpl() { return mode_impl; }
 
 private:
