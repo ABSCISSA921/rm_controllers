@@ -27,7 +27,7 @@ public:
     State10 q{ State10::Ones() };  // Diagonal state weights, finite and >= 0.
     Input4 r{ Input4::Ones() };    // Diagonal input-deviation weights, finite and > 0.
 
-    // Absolute total U4 bounds, finite with input_min <= input_max. Configure physical limits before use.
+    // Absolute total U4 bounds with input_min <= input_max; -infinity/+infinity disable individual limits.
     // The implementation subtracts uff before giving these bounds to TinyMPC. Zero defaults allow only zero input.
     // Tp bounds constrain virtual leg torques; hip/knee limits still need checking after VMC.
     Input4 input_min{ Input4::Zero() };
@@ -71,7 +71,8 @@ public:
   bool initialize(const LinearModel& continuous_model, const Params& params);
 
   // Non-RT: update absolute total U4 bounds, converting them with the initialized model's uff.
-  // Requires initialization and finite, ordered bounds. Invalid updates return false without replacing valid bounds.
+  // Requires ordered, non-NaN bounds; -infinity/+infinity disable individual lower/upper limits.
+  // Invalid updates return false without replacing valid bounds.
   // Successful updates clear the warm start/results so that no solution from the former bounds can be reused.
   bool setInputBounds(const Input4& input_min, const Input4& input_max);
 

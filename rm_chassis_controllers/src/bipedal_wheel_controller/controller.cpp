@@ -4,6 +4,7 @@
 
 #include "bipedal_wheel_controller/controller.h"
 #include <urdf/model.h>
+#include <limits>
 
 #include <angles/angles.h>
 #include <geometry_msgs/Quaternion.h>
@@ -114,6 +115,7 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
   if (balance_mode_ != NORMAL)
   {
     normal_feedback_.active = false;
+    normal_feedback_.mpc_active = false;
     normal_feedback_.reference_valid = false;
     integrateVelocity(); // Mechanical modes use the current kinematic speed.
   }
@@ -364,7 +366,7 @@ bool BipedalController::setupParams(ros::NodeHandle &controller_nh)
       !setupChassisGeometryParams(controller_nh))
     return false;
   setupVelocityEstimator(controller_nh);
-  return setupLQR(controller_nh);
+  return setupLQR(controller_nh) && setupMpc(controller_nh);
 }
 
 bool BipedalController::setupModelParams(ros::NodeHandle &controller_nh)
@@ -684,6 +686,57 @@ bool BipedalController::setupLQR(ros::NodeHandle &controller_nh)
   gain_update_buffer_.initRT(generated);
   ROS_INFO("[lqr10] generated from controller source: %u CARE, %u validation points, fit=%g trim=%g pole=%g",
            report.nodes, report.validation_points, report.fit_error, report.equilibrium_error, report.max_real);
+  return true;
+}
+
+bool BipedalController::setupMpc(ros::NodeHandle& nh)
+{
+  auto& params = mpc_params_;
+  // Preflight at init; Normal rebuilds with the actual control period before the first solve.
+  params.sample_period = .01;
+  params.max_solve_time = .008;
+  params.q = lqr_config_.q;
+  params.r = lqr_config_.r;
+  double wheel_limit = 3.58;
+  nh.param("mpc/wheel_torque_limit", wheel_limit, wheel_limit);
+  nh.param("mpc/horizon", params.horizon, params.horizon);
+  nh.param("mpc/rho", params.rho, params.rho);
+  nh.param("mpc/max_iter", params.max_iter, params.max_iter);
+  nh.param("mpc/abs_pri_tol", params.abs_pri_tol, params.abs_pri_tol);
+  nh.param("mpc/abs_dua_tol", params.abs_dua_tol, params.abs_dua_tol);
+  nh.param("mpc/max_solve_time", params.max_solve_time, params.max_solve_time);
+  nh.param("mpc/length_tolerance", mpc_length_tolerance_, mpc_length_tolerance_);
+  if (!std::isfinite(wheel_limit) || wheel_limit <= 0. || !std::isfinite(mpc_length_tolerance_) ||
+      mpc_length_tolerance_ <= 0.)
+  {
+    ROS_ERROR("[mpc] wheel_torque_limit and length_tolerance must be finite and positive");
+    return false;
+  }
+  const double unlimited = std::numeric_limits<double>::infinity();
+  params.input_min << -wheel_limit, -wheel_limit, -unlimited, -unlimited;
+  params.input_max << wheel_limit, wheel_limit, unlimited, unlimited;
+  mpc_model_valid_ = false;
+  mpc_.reset(new mpc_backend);
+  mpc_lengths_.setConstant(default_leg_length_);
+  try
+  {
+    mpc_model_valid_ = mpc_->initialize(linearModel(lqr_config_.model, mpc_lengths_), params);
+    if (mpc_model_valid_)
+      mpc_reference_.resize(10, params.horizon);
+  }
+  catch (const std::exception& ex)
+  {
+    ROS_ERROR("[mpc] Backend initialization failed: %s", ex.what());
+    mpc_model_valid_ = false;
+  }
+  if (!mpc_model_valid_)
+  {
+    ROS_ERROR("[mpc] Invalid model/settings or backend initialization failed");
+    mpc_.reset();
+    return false;
+  }
+  ROS_INFO("[mpc] Synchronous Normal feedback: control-loop dt, N=%d wheel bounds=+-%g Nm, virtual legs unbounded",
+           params.horizon, wheel_limit);
   return true;
 }
 

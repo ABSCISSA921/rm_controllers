@@ -1,0 +1,4 @@
+<launch>
+  <test test-name="bipedal_normal_mpc_test" pkg="rm_chassis_controllers"
+        type="bipedal_normal_mpc_test" time-limit="45.0" />
+</launch>

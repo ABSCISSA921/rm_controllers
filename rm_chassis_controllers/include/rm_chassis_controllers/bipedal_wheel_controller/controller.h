@@ -24,6 +24,7 @@
 #include <rm_chassis_controllers/LQRWeightConfig.h>
 #include "bipedal_wheel_controller/dynamics/model10.h"
 #include "bipedal_wheel_controller/estimation/velocity_kf.h"
+#include "bipedal_wheel_controller/mpc/mpc_backend.h"
 #include "rm_chassis_controllers/chassis_base.h"
 
 #include "bipedal_wheel_controller/helper_functions.h"
@@ -85,6 +86,7 @@ protected:
 private:
   friend class Normal;
   friend class BipedalObservationTest; // Offline regression of the real observation/mode functions.
+  friend class BipedalNormalMpcTest;
   void updateEstimation(const ros::Time &time, const ros::Duration &period);
   void updateChassisState();
   void publishMode();
@@ -100,6 +102,13 @@ private:
   bool setupParams(ros::NodeHandle &controller_nh);
   bool loadLqrParams(ros::NodeHandle &controller_nh, Config &config);
   bool setupLQR(ros::NodeHandle &controller_nh);
+  bool setupMpc(ros::NodeHandle &controller_nh);
+  std::unique_ptr<mpc_backend> mpc_;
+  mpc_backend::Params mpc_params_;
+  mpc_backend::StateTrajectory mpc_reference_;
+  Eigen::Vector2d mpc_lengths_{Eigen::Vector2d::Zero()};
+  double mpc_length_tolerance_{.002};
+  bool mpc_model_valid_{false};
   GainUpdate polyfit(const State10 &q, const Input4 &r, DesignReport &report) const;
   void reconfigCB(LQRWeightConfig &config, uint32_t level);
   void configureLqrInterface(ros::NodeHandle &controller_nh);

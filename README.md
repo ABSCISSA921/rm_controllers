@@ -18,7 +18,7 @@
 
 `RM_BUILD_BIPEDAL` 默认 `OFF`。普通机器人直接执行 `catkin build`，不编译轮腿源码，也不查找、构建或下载 TinyMPC。轮腿使用者显式开启一次后，选择保存在该包的 `CMakeCache.txt` 中，后续仍直接执行 `catkin build`，不需要 profile。
 
-本次实现的是**编译隔离、外部依赖构建和 Eigen 兼容性验证**。`normal.cpp` 目前仍使用现有十状态 LQR；开启 TinyMPC 依赖不会自动把控制算法换成 MPC。算法接管的后续方案见本文末尾。
+轮腿 `Normal` 的地面四维反馈已接入 TinyMPC。`Normal` 在当前控制周期直接调用后端，使用当前观测和参考轨迹同步求解。求解或模型更新失败时使用本周期重新计算并限幅的十状态 LQR。配置和执行边界见本文末尾。
 
 轮腿构建只使用 `RM_BUILD_BIPEDAL` 一个开关：
 
@@ -172,7 +172,7 @@ catkin build rm_chassis_controllers --cmake-args \
 catkin build
 ```
 
-应生成 `devel/lib/librm_bipedal_controllers.so`。**此阶段只是准备并验证依赖，现有 Normal LQR 没有替换成 MPC。** 静态库中未被实际引用的对象可能不会进入最终 `.so`，不能把链接命令出现 TinyMPC 当成控制算法已经使用它的证据。
+应生成 `devel/lib/librm_bipedal_controllers.so`。`BipedalController` 初始化时预检查 MPC 后端；Normal 地面反馈在当前周期同步求解，失败时使用当前观测计算的 LQR 回退。
 
 如果 SDK 不存在，普通 OFF 构建仍然成功；`RM_BUILD_BIPEDAL=ON` 的构建应失败。`RmTinyMPC_DIR` 是包级提示路径，不需要全局增加安装前缀。
 
@@ -248,14 +248,44 @@ c++ -std=c++14 -O3 \
 
 两份日志中的 `EIGEN` 行应分别为 3.4.90、3.3.7；对照 `RESULT wide`、`RESULT bounded` 行的数值。代码生成文件位于各 build 目录的 `generated_wide/src/tiny_data.cpp`、`generated_bounded/src/tiny_data.cpp`，比较其数值部分时忽略生成时间注释。
 
-### 后续控制算法修改方案
+### Normal 的 MPC 接入
 
-按以下顺序推进，保持后续 TinyMPC 代码和编译要求仅作用于轮腿目标：
+只有 Normal 的地面 U4 反馈进入 MPC，输入顺序为 `[T_L, T_R, Tp_L, Tp_R]`，单位 N·m。左右轮总力矩默认各限幅 **±3.58 N·m**，虚拟腿力矩按当前要求不设限。后端用 `-infinity/+infinity` 表示未设置的单侧边界；拒绝 NaN、反向无穷大和倒置边界。
 
-1. 在轮腿实现目录增加 MPC 后端；TinyMPC 头文件留在私有实现中，不放进公共底盘头文件。正常 OFF 构建必须始终不触及该代码和依赖。
-2. 以现有 `linearModel()` 的连续模型为起点，非实时阶段生成固定腿长、固定采样周期的离散模型和缓存；统一十状态、四输入的顺序、正负号和单位。
-3. 保留静态平衡点与前馈。若求解偏差状态和增量输入，明确 `z=x-x_eq`、`v=u-u_ff`，输出只加一次前馈，约束也转换到同一坐标系。
-4. 初期仅替换 `Normal::computeFeedback()` 的四维地面反馈；保留状态估计、腿长 PID、重力/横滚补偿、VMC、跳跃和保护流程。先影子运行，再在仿真中接管输出。
-5. 求解设置迭代上限、检查状态/有限值/时效/模型版本。模型、权重、腿长和采样周期变化时同步更新缓存，不能只换 A/B。模式切换作废旧解。
-6. 分别测量求解分配、日志输出、最大时延和失败行为。上游默认实现不是已经证明适合当前实时线程的版本；确定执行线程、延迟补偿及经验证的 LQR 回退策略后再进入实机阶段。
-7. 最终执行器约束仍需在 VMC 后检查，虚拟腿力矩受限不等于髋/膝力矩一定受限；完成闭环和时序验证后，才更新目标轮腿机器人的配置。其他机器人的 YAML 保持原样。
+现有状态估计、腿长 PID、重力/横滚/弹簧补偿、VMC、跳跃及机械模式继续使用原路径。MPC 输出已经包含静态前馈，Normal 不再重复叠加。位移观测保留原逻辑：非 RAW、速度绝对值不超过 0.5 m/s 且速度指令绝对值不超过 0.01 m/s 时积分，其余情况清零。当前位移参考保持为零，保留原停车位置保持语义；只有 MPC 预测窗口内的位置参考按目标速度推进，不跨控制周期累计。航向参考仍按偏航角速度持续积分，并在预测窗口内继续推进。离开 Normal、重入和开始跳跃会清理后端热启动和旧结果。
+
+参数放在 `chassis_controller` 命名空间下，以下即默认值，无需新增 YAML 即可采用这些 MPC 设置：
+
+```yaml
+mpc:
+  horizon: 16              # 16 个状态节点，15 个输入区间
+  wheel_torque_limit: 3.58 # 左右轮总力矩，虚拟腿不限幅
+  rho: 1.0
+  max_iter: 100
+  abs_pri_tol: 0.0001
+  abs_dua_tol: 0.0001
+  max_solve_time: 0.008    # 求解完成后的耗时拒绝阈值；0 关闭，不能中断求解
+  length_tolerance: 0.002  # 米；任一腿变化超过此值时重建完整模型/缓存
+```
+
+继续使用已有十状态 `q`、四输入 `r` 和 `lqr_model` 物理参数；六状态旧配置仍需先迁移到当前控制器要求的十状态配置。动态 Q/R 更新与 LQR 使用同一份快照，后端完整重新初始化后才使用新权重求解。MPC 参数在控制器初始化时读取，修改这些参数后需重新加载控制器。
+
+Normal 直接调用 `mpc_backend::solve()`，使用本周期观测生成 `10×N` 的预测参考，并立即采用本次求解的首步总输入。预测采样周期取当前 `chassis.dt`，与控制周期一致。腿长变化超过容差、Q/R 变化或控制周期变化时，先重建完整求解器及缓存，再求解；初始化失败则走 LQR，恢复有效输入后重试。
+
+已移除后台线程、请求/结果队列、代次标记及异步结果时效检查。旧的 `mpc/sample_period`、`max_result_age`、`velocity_tolerance` 和 `yaw_rate_tolerance` 参数不再使用。
+
+无有效结果时，Normal 基于当前观测重算 `u_ff - K(x-x_ref)`，并施加相同轮力矩限幅；不会重用失败的 MPC 命令。观测、参考或 LQR 回退无效时进入 PROTECT，并在本周期将关节命令清零。`NormalFeedback::mpc_active` 记录本周期是否采用 MPC，现有兼容状态话题继续发布实际使用的 U4/F。
+
+模型重建和求解都在控制线程中同步执行，包含动态内存分配。`max_solve_time` 只检查 `solve()` 内部耗时，不覆盖模型重建，也不能抢占求解。控制周期抖动导致采样周期变化时也会重建模型；本实现尚未证明硬实时性或实机稳定性。虚拟腿不限幅不提供 VMC 后髋/膝关节的力矩保证。
+
+接入回归可单独执行（不依赖已知过时的 `bipedal_observation_test`）：
+
+```bash
+catkin build rm_chassis_controllers --no-deps --make-args \
+  bipedal_normal_mpc_test bipedal_mpc_backend_test
+source devel/setup.bash
+./devel/lib/rm_chassis_controllers/bipedal_mpc_backend_test
+rostest rm_chassis_controllers bipedal_normal_mpc.test
+```
+
+回归覆盖真实 Normal 的同步后端输出与单次前馈、预测窗口内移动参考、行驶位移清零和停车漂移保持、腿长/权重/控制周期更新、模型重建失败、超时回退、模式重入、轮力矩限幅及非法观测保护；后端测试同时覆盖轮受限而虚拟腿不受限的求解。

@@ -1,5 +1,6 @@
 #include "bipedal_wheel_controller/controller_mode/normal.h"
 #include "bipedal_wheel_controller/controller.h"
+#include <exception>
 namespace rm_chassis_controllers
 {
 Normal::Normal(BipedalControllerInterface *c, const std::vector<hardware_interface::JointHandle *> &joints,
@@ -27,7 +28,9 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     for (auto *pid : legs_)
       pid->reset();
     feedback.active = false;
+    feedback.mpc_active = false;
     feedback.reference_valid = false;
+    resetMpc();
     controller->setStateChange(true);
     ROS_INFO("[balance] Enter NORMAL with ten-state feedback");
   }
@@ -51,7 +54,9 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     jump_phase_ = LEG_RETRACTION;
     jump_dwell_ = 0.;
     feedback.active = false;
+    feedback.mpc_active = false;
     feedback.reference_valid = false;
+    resetMpc();
     ROS_INFO("[balance] Jump start: original axial stages with mechanical swing PID");
   }
   if (jump_phase_ != IDLE)
@@ -60,7 +65,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     return;
   }
   const auto command = controller->getVelCmd();
-  // Original automatic stair trigger, evaluated before ground-LQR feedback.
+  // Original automatic stair trigger, evaluated before ground feedback.
   if (controller->getCompleteStand() &&
       std::abs((chassis.x[THETA_L] + chassis.x[THETA_R]) / 2.) > .50 && std::abs(command.x) > .1 &&
       std::abs(chassis.x[V]) > .1 && (lp.L0 + rp.L0) / 2. > .30 && controller->getLegCmd() > .30)
@@ -128,7 +133,11 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   const double circle = chassis.x[V] * chassis.x[YAW_RATE];
   const double alpha = std::abs(circle) > 10. ? 10. / std::abs(circle) : 1.;
   const double velocity_reference = complete_stand ? alpha * command.x : 0.;
-  computeFeedback(velocity_reference, alpha * command.z);
+  if (!computeFeedback(velocity_reference, alpha * command.z))
+  {
+    requestMode(PROTECT);
+    return;
+  }
   // Second-order length shaping is inactive; retain the former path for reference.
   // if (complete_stand)
   //   length_reference_.update(requested_length, chassis.dt, config.length_reference_tau);
@@ -181,6 +190,8 @@ void Normal::requestMode(int mode)
     bipedal_controller->chassis_state_.x[S] = 0.;
   auto &result = controller->getNormalFeedback();
   result.active = result.reference_valid = false;
+  result.mpc_active = false;
+  resetMpc();
   controller->setMode(mode);
   controller->setStateChange(false);
   controller->setCompleteStand(false);
@@ -250,16 +261,30 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
   }
 }
 
-void Normal::computeFeedback(double velocity, double yaw_rate)
+void Normal::resetMpc()
 {
-  auto &feedback = controller->getNormalFeedback();
-  const auto &chassis = controller->getChassisState();
-  const auto &config = controller->getLqrConfig();
+  auto* bipedal_controller = static_cast<BipedalController*>(controller);
+  if (bipedal_controller->mpc_)
+    bipedal_controller->mpc_->reset();
+}
+
+bool Normal::computeFeedback(double velocity, double yaw_rate)
+{
+  auto& feedback = controller->getNormalFeedback();
+  const auto& chassis = controller->getChassisState();
+  const auto& config = controller->getLqrConfig();
+  auto* bipedal_controller = static_cast<BipedalController*>(controller);
+  auto* mpc = bipedal_controller->mpc_.get();
+  feedback.mpc_active = false;
+  if (!mpc || !chassis.x.allFinite() || !chassis.length.allFinite() ||
+      (chassis.length.array() < config.model.geometry_domain[0]).any() ||
+      (chassis.length.array() > config.model.geometry_domain[1]).any() || !std::isfinite(chassis.dt) ||
+      chassis.dt <= 0. || !std::isfinite(velocity) || !std::isfinite(yaw_rate))
+    return false;
   Gain10 gain;
   Input4 feedforward;
   State10 equilibrium;
   evaluate(config, chassis.length, gain, feedforward, &equilibrium);
-  auto *bipedal_controller = static_cast<BipedalController *>(controller);
   if (!feedback.reference_valid)
   {
     feedback.reference.setZero();
@@ -269,13 +294,63 @@ void Normal::computeFeedback(double velocity, double yaw_rate)
   }
   // Absolute physical angles remain in the observation. Only the commanded static
   // equilibrium is scheduled; S is cleared and yaw reference initialized on Normal entry.
-  for (int i : {THETA_L, THETA_R, BODY_PITCH})
+  for (int i : { THETA_L, THETA_R, BODY_PITCH })
     feedback.reference[i] = equilibrium[i];
   feedback.reference[V] = velocity;
   feedback.reference[YAW_RATE] = yaw_rate;
   feedback.reference[YAW] += yaw_rate * chassis.dt;
-  feedback.output = feedforward - gain * (chassis.x - feedback.reference);
+  if (!feedback.reference.allFinite())
+    return false;
+  Input4 output;
+  auto& params = bipedal_controller->mpc_params_;
+  auto& model_valid = bipedal_controller->mpc_model_valid_;
+  if (!model_valid || !mpc->initialized() || params.sample_period != chassis.dt ||
+      (chassis.length - bipedal_controller->mpc_lengths_).cwiseAbs().maxCoeff() >
+          bipedal_controller->mpc_length_tolerance_ ||
+      (params.q.array() != config.q.array()).any() || (params.r.array() != config.r.array()).any())
+  {
+    model_valid = false;
+    auto next_params = params;
+    next_params.sample_period = chassis.dt;
+    next_params.q = config.q;
+    next_params.r = config.r;
+    try
+    {
+      // Rebuild the complete solver/cache before solving with changed dynamics, period or weights.
+      model_valid = mpc->initialize(linearModel(config.model, chassis.length), next_params);
+      if (model_valid)
+      {
+        params = next_params;
+        bipedal_controller->mpc_lengths_ = chassis.length;
+      }
+    }
+    catch (const std::exception&)
+    {
+      mpc->reset();
+    }
+  }
+  if (model_valid)
+  {
+    auto& trajectory = bipedal_controller->mpc_reference_;
+    for (int i = 0; i < params.horizon; ++i)
+    {
+      trajectory.col(i) = feedback.reference;
+      trajectory(S, i) += velocity * params.sample_period * i;
+      trajectory(YAW, i) += yaw_rate * params.sample_period * i;
+    }
+    feedback.mpc_active = mpc->solve(chassis.x, trajectory, output);
+  }
+  if (!feedback.mpc_active)
+  {
+    // Recompute from this observation; never reuse a rejected/old MPC command or add feedforward twice.
+    output = feedforward - gain * (chassis.x - feedback.reference);
+    if (!gain.allFinite() || !feedforward.allFinite() || !output.allFinite())
+      return false;
+    output = output.cwiseMax(params.input_min).cwiseMin(params.input_max);
+  }
+  feedback.output = output;
   feedback.active = true;
+  return true;
 }
 
-} // namespace rm_chassis_controllers
+}  // namespace rm_chassis_controllers

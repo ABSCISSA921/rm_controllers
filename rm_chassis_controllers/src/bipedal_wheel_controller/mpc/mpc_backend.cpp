@@ -16,6 +16,15 @@ namespace
 constexpr int NX = 10;
 constexpr int NU = 4;
 
+bool validBounds(const Input4& lower, const Input4& upper)
+{
+  for (int i = 0; i < NU; ++i)
+    if (std::isnan(lower[i]) || std::isnan(upper[i]) || lower[i] == INFINITY || upper[i] == -INFINITY ||
+        lower[i] > upper[i])
+      return false;
+  return true;
+}
+
 struct SolverDeleter
 {
   void operator()(TinySolver* solver) const noexcept
@@ -63,7 +72,7 @@ struct mpc_backend::Impl
   {
     const Input4 lower_deviation = lower - feedforward;
     const Input4 upper_deviation = upper - feedforward;
-    if (!lower_deviation.allFinite() || !upper_deviation.allFinite() || (lower.array() > upper.array()).any())
+    if (!validBounds(lower, upper) || !validBounds(lower_deviation, upper_deviation))
       return false;
     const tinyMatrix state_bounds = tinyMatrix::Zero(NX, params.horizon);
     const tinyMatrix input_lower = lower_deviation.replicate(1, params.horizon - 1);
@@ -94,8 +103,7 @@ bool mpc_backend::initialize(const LinearModel& model, const Params& params)
       !std::isfinite(params.abs_pri_tol) || params.abs_pri_tol <= 0. || !std::isfinite(params.abs_dua_tol) ||
       params.abs_dua_tol <= 0. || !std::isfinite(params.max_solve_time) || params.max_solve_time < 0. ||
       !model.A.allFinite() || !model.B.allFinite() || !model.equilibrium.allFinite() || !model.uff.allFinite() ||
-      !model.residual.allFinite() || !params.input_min.allFinite() || !params.input_max.allFinite() ||
-      (params.input_min.array() > params.input_max.array()).any())
+      !model.residual.allFinite() || !validBounds(params.input_min, params.input_max))
     return false;
 
   impl_->report.status = Status::SOLVER_FAILED;

@@ -145,6 +145,31 @@ TEST(BipedalMpcBackend, ReturnsFeedforwardOnceAtEquilibriumAndSupportsZeroStateW
   EXPECT_TRUE(output.isApprox(officialOutput(model, params, state, reference), 2e-7));
 }
 
+TEST(BipedalMpcBackend, LimitsWheelsWhileLeavingVirtualLegTorquesUnbounded)
+{
+  const auto model = simpleModel();
+  auto params = parameters();
+  const double inf = std::numeric_limits<double>::infinity();
+  params.input_min << -3.58, -3.58, -inf, -inf;
+  params.input_max << 3.58, 3.58, inf, inf;
+  Backend backend;
+  ASSERT_TRUE(backend.initialize(model, params));
+  State10 state = model.equilibrium;
+  state.head<4>() += (Input4() << 100., -100., 100., -100.).finished();
+  const Backend::StateTrajectory reference = model.equilibrium.replicate(1, params.horizon);
+  Input4 output;
+  ASSERT_TRUE(backend.solve(state, reference, output));
+  EXPECT_NEAR(output[0], -3.58, 1e-8);
+  EXPECT_NEAR(output[1], 3.58, 1e-8);
+  EXPECT_GT(std::abs(output[2]), 3.58);
+  EXPECT_GT(std::abs(output[3]), 3.58);
+  EXPECT_TRUE(output.isApprox(officialOutput(model, params, state, reference), 2e-7));
+  EXPECT_FALSE(backend.setInputBounds(Input4::Constant(-inf), Input4::Constant(-inf)));
+  Input4 invalid = params.input_max;
+  invalid[2] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(backend.setInputBounds(params.input_min, invalid));
+}
+
 TEST(BipedalMpcBackend, RejectsInvalidParametersAndInvalidatesModelOnFailedReinitialization)
 {
   const auto model = simpleModel();
@@ -161,7 +186,7 @@ TEST(BipedalMpcBackend, RejectsInvalidParametersAndInvalidatesModelOnFailedReini
   invalid[8].max_solve_time = -1.;
   invalid[9].input_min[0] = good.input_max[0] + 1.;
   invalid[10].q[0] = std::numeric_limits<double>::quiet_NaN();
-  invalid[11].input_max[0] = std::numeric_limits<double>::infinity();
+  invalid[11].input_min[0] = std::numeric_limits<double>::infinity();
   Backend backend;
   for (const auto& params : invalid)
   {

@@ -66,11 +66,12 @@ struct Config
 
 struct NormalFeedback
 {
-  State10 reference{State10::Zero()}; // Xref, with zero position and integrated yaw target.
+  State10 reference{State10::Zero()}; // Absolute current target, with zero position and integrated yaw.
   bool reference_valid{false};
   Input4 output{Input4::Zero()}; // U4 consumed by VMC/wheels and the compatibility status.
   Eigen::Vector2d axial_force{Eigen::Vector2d::Zero()}; // F consumed by VMC and the same status.
   bool active{false}; // Selects Normal U4/F for status publication; does not authorize control.
+  bool mpc_active{false}; // True when output came from MPC; false when inactive or using current-cycle LQR fallback.
 };
 
 struct ControlParams
