@@ -70,6 +70,8 @@ mat(i / mat.cols(), i % mat.cols())
 
 前者读取向量最后一个元素，后者按行优先顺序读取矩阵元素。上游 checkout 保持不变；仓库不保存 TinyMPC 实现或它的 Eigen，也不使用 FetchContent 或 submodule。`Eigen.h` 仅用三行适配头转发到系统 `<Eigen/Core>`、`<Eigen/LU>`，不是版本桥接层。
 
+驱动还会在构建副本中移除每次求解成功时的 `Solver converged in ... iterations` 标准输出，避免控制循环持续打印；此修改不受 `RM_TINYMPC_EIGEN33_COMPAT` 开关影响。已有 SDK 需重新构建、安装，并重新链接轮腿库后生效。
+
 驱动固定检查上述 commit 和未修改的上游受跟踪文件，使用 `find_package(Eigen3 3.3.7 EXACT CONFIG REQUIRED)`；遇到版本变化应重新验证，不能直接放宽版本条件。
 
 本次实测：
