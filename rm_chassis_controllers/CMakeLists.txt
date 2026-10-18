@@ -84,6 +84,7 @@ set(BIPEDAL_SOURCES
         src/bipedal_wheel_controller/estimation/velocity_kf.cpp
         src/bipedal_wheel_controller/dynamics/model10.cpp
         src/bipedal_wheel_controller/dynamics/design10.cpp
+        src/bipedal_wheel_controller/mpc/mpc_backend.cpp
         src/bipedal_wheel_controller/controller.cpp
         src/bipedal_wheel_controller/controller_mode/mode_base.cpp
         src/bipedal_wheel_controller/controller_mode/mode_manager.cpp
@@ -122,6 +123,9 @@ add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg ${catkin_EXPORTED_TARGET
 if(RM_BUILD_BIPEDAL)
   # An enabled bipedal build always requires the externally built SDK.
   find_package(RmTinyMPC 0.2 CONFIG REQUIRED)
+  if(NOT RmTinyMPC_UPSTREAM_REVISION STREQUAL "023f36bd5b27267e1a96ed47a774d120b5707f13")
+    message(FATAL_ERROR "The MPC backend requires the verified TinyMPC revision 023f36bd5b27267e1a96ed47a774d120b5707f13")
+  endif()
   if(NOT "${RmTinyMPC_EIGEN_VERSION}" VERSION_EQUAL "${EIGEN3_VERSION_STRING}")
     message(FATAL_ERROR "TinyMPC and rm_chassis_controllers must use the same Eigen version")
   endif()
@@ -202,6 +206,11 @@ if(CATKIN_ENABLE_TESTING)
     endif()
   endif()
   if(RM_BUILD_BIPEDAL)
+    catkin_add_gtest(bipedal_mpc_backend_test test/bipedal_mpc_backend_test.cpp)
+    if(TARGET bipedal_mpc_backend_test)
+      target_link_libraries(bipedal_mpc_backend_test rm_bipedal_controllers ${catkin_LIBRARIES})
+      add_dependencies(bipedal_mpc_backend_test ${PROJECT_NAME}_gencfg ${catkin_EXPORTED_TARGETS})
+    endif()
     add_rostest_gtest(bipedal_observation_test test/bipedal_observation.test test/bipedal_observation_test.cpp)
     if(TARGET bipedal_observation_test)
       target_link_libraries(bipedal_observation_test rm_bipedal_controllers ${PROJECT_NAME} ${catkin_LIBRARIES})
