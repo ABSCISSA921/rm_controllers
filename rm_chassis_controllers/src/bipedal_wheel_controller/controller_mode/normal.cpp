@@ -63,7 +63,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     return;
   }
   const auto command = controller->getVelCmd();
-  // Original automatic stair trigger, evaluated before ground feedback.
   if (controller->getCompleteStand() &&
       std::abs((chassis.x[THETA_L] + chassis.x[THETA_R]) / 2.) > .50 && std::abs(command.x) > .1 &&
       std::abs(chassis.x[V]) > .1 && (lp.L0 + rp.L0) / 2. > .30 && controller->getLegCmd() > .30)
@@ -181,7 +180,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
 
 void Normal::requestMode(int mode)
 {
-  // Clear mode state and commands for both action exits and feedback failures.
   auto* bipedal_controller = static_cast<BipedalController*>(controller);
   bipedal_controller->integrateVelocity();
   if (mode == PROTECT || mode == SIT_DOWN)
@@ -318,7 +316,6 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
     next_params.r = config.r;
     try
     {
-      // Rebuild the complete solver/cache before solving with changed dynamics, period or weights.
       model_valid = mpc->initialize(linearModel(config.model, chassis.length), next_params);
       if (model_valid)
       {

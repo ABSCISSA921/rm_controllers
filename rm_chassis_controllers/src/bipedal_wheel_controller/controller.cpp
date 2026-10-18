@@ -691,7 +691,6 @@ bool BipedalController::setupLQR(ros::NodeHandle &controller_nh)
 bool BipedalController::setupMpc(ros::NodeHandle& nh)
 {
   auto& params = mpc_params_;
-  // Preflight at init; Normal rebuilds with the actual control period before the first solve.
   params.sample_period = .01;
   params.max_solve_time = .008;
   params.q = lqr_config_.q;

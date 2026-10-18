@@ -87,10 +87,9 @@ void checkControl(double limit, const std::string& name)
     require(largest_input > .99 * limit, "bounded case did not exercise saturation");
   std::cout << std::setprecision(17) << "RESULT " << name << " " << first.transpose()
             << " " << x.norm() << " " << largest_input << "\n";
-  // Exercise the patched row-major code generation path as well as the solver.
   require(tiny_codegen(s, ("generated_" + name).c_str(), 0) == 0, "code generation failed");
 }
-}  // namespace
+}
 
 int main()
 {

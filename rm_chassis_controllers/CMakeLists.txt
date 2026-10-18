@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.10)
 project(rm_chassis_controllers)
 
 option(RM_BUILD_BIPEDAL "Build bipedal wheel controllers with external TinyMPC" OFF)
-# Remove the obsolete dependency switch from existing build directories.
 unset(RM_BIPEDAL_WITH_TINYMPC CACHE)
 message(STATUS "RM_BUILD_BIPEDAL=${RM_BUILD_BIPEDAL}")
 
@@ -121,7 +120,6 @@ target_link_libraries(${PROJECT_NAME}
 add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg ${catkin_EXPORTED_TARGETS})
 
 if(RM_BUILD_BIPEDAL)
-  # An enabled bipedal build always requires the externally built SDK.
   find_package(RmTinyMPC 0.2 CONFIG REQUIRED)
   if(NOT RmTinyMPC_UPSTREAM_REVISION STREQUAL "023f36bd5b27267e1a96ed47a774d120b5707f13")
     message(FATAL_ERROR "The MPC backend requires the verified TinyMPC revision 023f36bd5b27267e1a96ed47a774d120b5707f13")

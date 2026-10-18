@@ -34,7 +34,6 @@ find_package(Eigen3 3.3.7 EXACT REQUIRED CONFIG)
 set(upstream_copy "${CMAKE_CURRENT_BINARY_DIR}/upstream/tinympc")
 file(COPY "${TINYMPC_SOURCE_DIR}/src/tinympc" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/upstream")
 if(RM_TINYMPC_EIGEN33_COMPAT)
-  # Keep upstream source untouched and fail rather than silently patch a new API.
   function(replace_required relative_path old_text new_text)
     set(path "${upstream_copy}/${relative_path}")
     file(READ "${path}" contents)
@@ -49,7 +48,6 @@ if(RM_TINYMPC_EIGEN33_COMPAT)
   replace_required(codegen.cpp "mat.reshaped<RowMajor>()[i]" "mat(i / mat.cols(), i % mat.cols())")
 endif()
 
-# TinyMPC includes Eigen.h. Supply only this shim, never its bundled Eigen tree.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/include/Eigen.h"
   "#pragma once\n#include <Eigen/Core>\n#include <Eigen/LU>\n")
@@ -71,7 +69,6 @@ target_link_libraries(tinympc PUBLIC Eigen3::Eigen)
 
 enable_testing()
 add_executable(tinympc_eigen_smoke smoke.cpp)
-# Match the ROS controller's language standard at the consumer boundary.
 set_target_properties(tinympc_eigen_smoke PROPERTIES CXX_STANDARD 14 CXX_STANDARD_REQUIRED YES)
 target_link_libraries(tinympc_eigen_smoke PRIVATE tinympc)
 add_test(NAME tinympc_eigen_smoke COMMAND tinympc_eigen_smoke)

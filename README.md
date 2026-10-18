@@ -258,14 +258,14 @@ c++ -std=c++14 -O3 \
 
 ```yaml
 mpc:
-  horizon: 16              # 16 个状态节点，15 个输入区间
-  wheel_torque_limit: 3.58 # 左右轮总力矩，虚拟腿不限幅
+  horizon: 16
+  wheel_torque_limit: 3.58
   rho: 1.0
   max_iter: 100
   abs_pri_tol: 0.0001
   abs_dua_tol: 0.0001
-  max_solve_time: 0.008    # 求解完成后的耗时拒绝阈值；0 关闭，不能中断求解
-  length_tolerance: 0.002  # 米；任一腿变化超过此值时重建完整模型/缓存
+  max_solve_time: 0.008
+  length_tolerance: 0.002
 ```
 
 继续使用已有十状态 `q`、四输入 `r` 和 `lqr_model` 物理参数；六状态旧配置仍需先迁移到当前控制器要求的十状态配置。动态 Q/R 更新沿用现有权重配置入口，后端完整重新初始化后才使用当前权重快照求解。MPC 参数在控制器初始化时读取，修改这些参数后需重新加载控制器。

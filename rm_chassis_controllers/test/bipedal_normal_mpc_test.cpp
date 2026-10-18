@@ -35,7 +35,6 @@ protected:
     config.uff = staticFeedforward(physical);
     config.q << 5., 5., 10., 1., 50., 2., 50., 2., 100., 5.;
     config.r << .5, .5, 1., 1.;
-    // Normal must not depend on an LQR gain table, even when the MPC solve fails.
     config.coeffs.setConstant(std::numeric_limits<double>::quiet_NaN());
     config.wheel_radius = physical.Rw;
     controller_.chassis_state_.length.setConstant(.22);
@@ -166,7 +165,7 @@ protected:
 TEST_F(BipedalNormalMpcTest, UsesCurrentObservationAndReturnsFeedforwardExactlyOnce)
 {
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().active);  // The first call solves immediately.
+  ASSERT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
   EXPECT_GT((feedback().output - controller_.getLqrConfig().uff).norm(), 1e-3);
   state().x[BODY_PITCH] = -.02;
@@ -184,7 +183,7 @@ TEST_F(BipedalNormalMpcTest, DrivingKeepsZeroPositionOriginAndAdvancesOnlyPredic
   EXPECT_DOUBLE_EQ(feedback().reference[V], .4);
   EXPECT_DOUBLE_EQ(feedback().reference[YAW_RATE], -.3);
   EXPECT_TRUE(feedback().active);
-  EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));  // Includes the complete moving trajectory.
+  EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
   state().x[S] = .2;
   state().x[V] = 2.;
   setVelocity(2.);
@@ -194,7 +193,7 @@ TEST_F(BipedalNormalMpcTest, DrivingKeepsZeroPositionOriginAndAdvancesOnlyPredic
 
 TEST_F(BipedalNormalMpcTest, ParkingIntegratesDriftWithoutMovingThePositionTarget)
 {
-  ASSERT_TRUE(compute());  // Establish Normal's position origin before introducing drift.
+  ASSERT_TRUE(compute());
   state().x[S] = .02;
   state().x[V] = .1;
   setVelocity(0.);
@@ -203,17 +202,17 @@ TEST_F(BipedalNormalMpcTest, ParkingIntegratesDriftWithoutMovingThePositionTarge
   ASSERT_TRUE(compute());
   ASSERT_TRUE(feedback().active);
   EXPECT_DOUBLE_EQ(feedback().reference[S], 0.);
-  EXPECT_NEAR(state().x[S], .0201, 1e-12);  // computeFeedback must not re-anchor at the drifting observation.
+  EXPECT_NEAR(state().x[S], .0201, 1e-12);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
   state().x[V] = .6;
   integrate();
-  EXPECT_DOUBLE_EQ(state().x[S], 0.);  // Preserve the original speed threshold even with a zero command.
+  EXPECT_DOUBLE_EQ(state().x[S], 0.);
   state().x[S] = .02;
   state().x[V] = .1;
   controller_.setMode(NORMAL);
   setVelocity(.02);
   integrate();
-  EXPECT_DOUBLE_EQ(state().x[S], 0.);  // Preserve the original command threshold at low measured speed.
+  EXPECT_DOUBLE_EQ(state().x[S], 0.);
 }
 
 TEST_F(BipedalNormalMpcTest, RebuildsForLengthsWeightsAndActualControlPeriod)
@@ -270,11 +269,11 @@ TEST_F(BipedalNormalMpcTest, DefaultSynchronousFeedbackStabilizesTheLinearPlant)
 
 TEST_F(BipedalNormalMpcTest, LateSolveRequestsProtectionAndClearsAllJointCommands)
 {
-  startBackend(1e-12);  // Reject the result after the synchronous solver finishes.
+  startBackend(1e-12);
   feedback().output.setConstant(123.);
   EXPECT_FALSE(compute());
   EXPECT_FALSE(feedback().active);
-  EXPECT_TRUE(feedback().output.isConstant(123.));  // No LQR or partially solved command replaces it.
+  EXPECT_TRUE(feedback().output.isConstant(123.));
   for (double& command : commands_)
     command = 42.;
   execute();
@@ -302,7 +301,7 @@ TEST_F(BipedalNormalMpcTest, FailedModelRebuildDoesNotUseThePreviousSolver)
 {
   ASSERT_TRUE(compute());
   ASSERT_TRUE(feedback().active);
-  state().dt = std::numeric_limits<double>::max();  // Finite, but overflows discretization.
+  state().dt = std::numeric_limits<double>::max();
   EXPECT_FALSE(compute());
   EXPECT_FALSE(feedback().active);
   state().dt = .001;
@@ -337,7 +336,7 @@ TEST_F(BipedalNormalMpcTest, ModeExitReentryAndJumpResetGroundFeedback)
     EXPECT_DOUBLE_EQ(command, 0.);
   reenter();
   execute();
-  EXPECT_TRUE(feedback().active);  // Reentry can solve immediately without waiting for another thread.
+  EXPECT_TRUE(feedback().active);
   jump();
   execute();
   EXPECT_FALSE(feedback().active);
@@ -352,7 +351,7 @@ TEST_F(BipedalNormalMpcTest, InvalidObservationRequestsProtectionBeforeWritingVm
   for (double command : commands_)
     EXPECT_DOUBLE_EQ(command, 0.);
 }
-}  // namespace rm_chassis_controllers
+}
 
 int main(int argc, char** argv)
 {

@@ -3,7 +3,6 @@
 
 namespace rm_chassis_controllers
 {
-// Stateless model/design routines; Normal uses staticEquilibrium() for its posture reference.
 struct LinearModel
 {
   Eigen::Matrix<double, 10, 10> A{ Eigen::Matrix<double, 10, 10>::Zero() };
