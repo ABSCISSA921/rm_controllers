@@ -25,7 +25,7 @@ public:
     Input4 input_min{ Input4::Zero() };
     Input4 input_max{ Input4::Zero() };
 
-    double rho{ 1. };
+    double rho{ 1000. };
     int max_iter{ 100 };
     double abs_pri_tol{ 1e-4 };
     double abs_dua_tol{ 1e-4 };

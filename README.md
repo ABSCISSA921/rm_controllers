@@ -262,7 +262,7 @@ c++ -std=c++14 -O3 \
 mpc:
   horizon: 16
   wheel_torque_limit: 3.58
-  rho: 1.0
+  rho: 1000.0
   max_iter: 100
   abs_pri_tol: 0.0001
   abs_dua_tol: 0.0001
