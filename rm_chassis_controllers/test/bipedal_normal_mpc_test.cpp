@@ -14,6 +14,7 @@ protected:
   control_toolbox::Pid roll_, leg_l_, leg_r_, theta_l_, theta_r_;
   double positions_[6]{}, velocities_[6]{}, efforts_[6]{}, commands_[6]{};
   std::vector<hardware_interface::JointHandle> handles_;
+  LinearModel backend_model_;
 
   void SetUp() override
   {
@@ -70,7 +71,7 @@ protected:
   void startBackend(double solve_budget = 0., int max_iter = 10000)
   {
     auto& params = controller_.mpc_params_;
-    params.sample_period = state().dt;
+    params.sample_period = .001;
     params.horizon = 21;
     params.max_iter = max_iter;
     params.abs_pri_tol = params.abs_dua_tol = 1e-7;
@@ -81,9 +82,8 @@ protected:
     params.input_min << -3.58, -3.58, -inf, -inf;
     params.input_max << 3.58, 3.58, inf, inf;
     controller_.mpc_.reset(new mpc_backend);
-    controller_.mpc_lengths_ = state().length;
-    ASSERT_TRUE(controller_.mpc_->initialize(linearModel(controller_.lqr_config_.model, state().length), params));
-    controller_.mpc_model_valid_ = true;
+    backend_model_ = linearModel(controller_.lqr_config_.model, state().length);
+    ASSERT_TRUE(controller_.mpc_->initialize(backend_model_, params));
     controller_.mpc_reference_.resize(10, params.horizon);
   }
 
@@ -128,9 +128,18 @@ protected:
   {
     controller_.vel_cmd_.x = v;
   }
-  void setWeights(const State10& q)
+  void setWeights(const State10& q, const Input4& r)
   {
     controller_.lqr_config_.q = q;
+    controller_.lqr_config_.r = r;
+  }
+  void uninitializeBackend()
+  {
+    controller_.mpc_.reset(new mpc_backend);
+  }
+  bool backendInitialized()
+  {
+    return controller_.mpc_->initialized();
   }
   const mpc_backend::Params& params()
   {
@@ -139,17 +148,16 @@ protected:
   bool configureDefaultBackend()
   {
     ros::NodeHandle nh("~mpc_defaults");
+    backend_model_ = linearModel(controller_.lqr_config_.model,
+                                Eigen::Vector2d::Constant(controller_.getDefaultLegLength()));
     return controller_.setupMpc(nh);
   }
 
   Input4 directOutput()
   {
-    const auto model = linearModel(controller_.lqr_config_.model, state().length);
-    auto params = controller_.mpc_params_;
-    params.q = controller_.lqr_config_.q;
-    params.r = controller_.lqr_config_.r;
+    const auto& params = controller_.mpc_params_;
     mpc_backend backend;
-    EXPECT_TRUE(backend.initialize(model, params));
+    EXPECT_TRUE(backend.initialize(backend_model_, params));
     mpc_backend::StateTrajectory trajectory = feedback().reference.replicate(1, params.horizon);
     for (int i = 0; i < params.horizon; ++i)
     {
@@ -215,8 +223,9 @@ TEST_F(BipedalNormalMpcTest, ParkingIntegratesDriftWithoutMovingThePositionTarge
   EXPECT_DOUBLE_EQ(state().x[S], 0.);
 }
 
-TEST_F(BipedalNormalMpcTest, RebuildsForLengthsWeightsAndActualControlPeriod)
+TEST_F(BipedalNormalMpcTest, KeepsInitialModelWeightsAndOneKhzSamplingWithoutRebuilding)
 {
+  const auto initial_params = params();
   ASSERT_TRUE(compute());
   ASSERT_TRUE(feedback().active);
   reset();
@@ -228,22 +237,40 @@ TEST_F(BipedalNormalMpcTest, RebuildsForLengthsWeightsAndActualControlPeriod)
   ASSERT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
   const State10 q = 2. * controller_.getLqrConfig().q;
-  setWeights(q);
+  const Input4 r = 3. * controller_.getLqrConfig().r;
+  setWeights(q, r);
   ASSERT_TRUE(compute());
   ASSERT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
-  state().dt = .005;
-  ASSERT_TRUE(compute());
+  for (double dt : { .001000001, .000999999, .005 })
+  {
+    state().dt = dt;
+    ASSERT_TRUE(compute(.4, -.3));
+    ASSERT_TRUE(feedback().active);
+    EXPECT_DOUBLE_EQ(params().sample_period, .001);
+    EXPECT_TRUE(params().q.isApprox(initial_params.q));
+    EXPECT_TRUE(params().r.isApprox(initial_params.r));
+    EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
+  }
+  requestMode(SIT_DOWN);
+  reenter();
+  execute();
   ASSERT_TRUE(feedback().active);
-  EXPECT_DOUBLE_EQ(params().sample_period, .005);
+  EXPECT_DOUBLE_EQ(params().sample_period, .001);
+  EXPECT_TRUE(params().q.isApprox(initial_params.q));
+  EXPECT_TRUE(params().r.isApprox(initial_params.r));
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
 }
 
 TEST_F(BipedalNormalMpcTest, DefaultSynchronousFeedbackStabilizesTheLinearPlant)
 {
-  ASSERT_TRUE(configureDefaultBackend());
-  state().dt = .01;
+  state().length.setConstant(controller_.getDefaultLegLength());
   const auto model = linearModel(controller_.getLqrConfig().model, state().length);
+  state().x = model.equilibrium;
+  state().x[BODY_PITCH] += .01;
+  ASSERT_TRUE(configureDefaultBackend());
+  EXPECT_DOUBLE_EQ(params().sample_period, .001);
+  state().dt = .001;
   ASSERT_TRUE(compute());
   const State10 reference = feedback().reference;
   state().x[S] += .02;
@@ -254,7 +281,7 @@ TEST_F(BipedalNormalMpcTest, DefaultSynchronousFeedbackStabilizesTheLinearPlant)
   augmented.block(0, 10, 10, 4) = model.B;
   augmented.block(0, 14, 10, 1) = model.residual;
   const Eigen::MatrixXd discrete = (state().dt * augmented).exp();
-  for (int i = 0; i < 250; ++i)
+  for (int i = 0; i < 5000; ++i)
   {
     ASSERT_TRUE(compute()) << "step=" << i;
     ASSERT_TRUE(feedback().active) << "step=" << i;
@@ -297,11 +324,11 @@ TEST_F(BipedalNormalMpcTest, UnconvergedSolveRequestsProtectionAndClearsAllJoint
     EXPECT_DOUBLE_EQ(command, 0.);
 }
 
-TEST_F(BipedalNormalMpcTest, FailedModelRebuildDoesNotUseThePreviousSolver)
+TEST_F(BipedalNormalMpcTest, InvalidControlPeriodDoesNotInvalidateTheInitializedModel)
 {
   ASSERT_TRUE(compute());
   ASSERT_TRUE(feedback().active);
-  state().dt = std::numeric_limits<double>::max();
+  state().dt = std::numeric_limits<double>::quiet_NaN();
   EXPECT_FALSE(compute());
   EXPECT_FALSE(feedback().active);
   state().dt = .001;
@@ -310,17 +337,16 @@ TEST_F(BipedalNormalMpcTest, FailedModelRebuildDoesNotUseThePreviousSolver)
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
 }
 
-TEST_F(BipedalNormalMpcTest, FailedModelInitializationRequestsProtection)
+TEST_F(BipedalNormalMpcTest, UninitializedBackendRequestsProtectionWithoutRebuilding)
 {
   ASSERT_TRUE(compute());
   ASSERT_TRUE(feedback().active);
-  State10 invalid_q = controller_.getLqrConfig().q;
-  invalid_q[0] = -1.;
-  setWeights(invalid_q);
+  uninitializeBackend();
   for (double& command : commands_)
     command = 42.;
   execute();
   EXPECT_EQ(controller_.getBalanceMode(), PROTECT);
+  EXPECT_FALSE(backendInitialized());
   EXPECT_FALSE(feedback().active);
   for (double command : commands_)
     EXPECT_DOUBLE_EQ(command, 0.);

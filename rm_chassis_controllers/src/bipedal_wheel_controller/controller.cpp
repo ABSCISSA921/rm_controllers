@@ -691,7 +691,7 @@ bool BipedalController::setupLQR(ros::NodeHandle &controller_nh)
 bool BipedalController::setupMpc(ros::NodeHandle& nh)
 {
   auto& params = mpc_params_;
-  params.sample_period = .01;
+  params.sample_period = .001;
   params.max_solve_time = .008;
   params.q = lqr_config_.q;
   params.r = lqr_config_.r;
@@ -703,37 +703,35 @@ bool BipedalController::setupMpc(ros::NodeHandle& nh)
   nh.param("mpc/abs_pri_tol", params.abs_pri_tol, params.abs_pri_tol);
   nh.param("mpc/abs_dua_tol", params.abs_dua_tol, params.abs_dua_tol);
   nh.param("mpc/max_solve_time", params.max_solve_time, params.max_solve_time);
-  nh.param("mpc/length_tolerance", mpc_length_tolerance_, mpc_length_tolerance_);
-  if (!std::isfinite(wheel_limit) || wheel_limit <= 0. || !std::isfinite(mpc_length_tolerance_) ||
-      mpc_length_tolerance_ <= 0.)
+  if (!std::isfinite(wheel_limit) || wheel_limit <= 0.)
   {
-    ROS_ERROR("[mpc] wheel_torque_limit and length_tolerance must be finite and positive");
+    ROS_ERROR("[mpc] wheel_torque_limit must be finite and positive");
     return false;
   }
   const double unlimited = std::numeric_limits<double>::infinity();
   params.input_min << -wheel_limit, -wheel_limit, -unlimited, -unlimited;
   params.input_max << wheel_limit, wheel_limit, unlimited, unlimited;
-  mpc_model_valid_ = false;
+  bool model_valid = false;
   mpc_.reset(new mpc_backend);
-  mpc_lengths_.setConstant(default_leg_length_);
   try
   {
-    mpc_model_valid_ = mpc_->initialize(linearModel(lqr_config_.model, mpc_lengths_), params);
-    if (mpc_model_valid_)
+    model_valid = mpc_->initialize(linearModel(lqr_config_.model, Eigen::Vector2d::Constant(default_leg_length_)), params);
+    if (model_valid)
       mpc_reference_.resize(10, params.horizon);
   }
   catch (const std::exception& ex)
   {
     ROS_ERROR("[mpc] Backend initialization failed: %s", ex.what());
-    mpc_model_valid_ = false;
+    model_valid = false;
   }
-  if (!mpc_model_valid_)
+  if (!model_valid)
   {
     ROS_ERROR("[mpc] Invalid model/settings or backend initialization failed");
     mpc_.reset();
     return false;
   }
-  ROS_INFO("[mpc] Synchronous Normal feedback: control-loop dt, N=%d wheel bounds=+-%g Nm, virtual legs unbounded",
+  ROS_INFO("[mpc] Synchronous Normal feedback: fixed 1 kHz model, no runtime rebuild, "
+           "N=%d wheel bounds=+-%g Nm, virtual legs unbounded",
            params.horizon, wheel_limit);
   return true;
 }

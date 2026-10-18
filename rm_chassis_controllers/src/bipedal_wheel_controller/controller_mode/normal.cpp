@@ -271,7 +271,7 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
   auto* bipedal_controller = static_cast<BipedalController*>(controller);
   auto* mpc = bipedal_controller->mpc_.get();
   feedback.active = false;
-  if (!mpc || !chassis.x.allFinite() || !chassis.length.allFinite() ||
+  if (!mpc || !mpc->initialized() || !chassis.x.allFinite() || !chassis.length.allFinite() ||
       (chassis.length.array() < config.model.geometry_domain[0]).any() ||
       (chassis.length.array() > config.model.geometry_domain[1]).any() || !std::isfinite(chassis.dt) ||
       chassis.dt <= 0. || !std::isfinite(velocity) || !std::isfinite(yaw_rate))
@@ -302,34 +302,7 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
   if (!feedback.reference.allFinite())
     return false;
   Input4 output;
-  auto& params = bipedal_controller->mpc_params_;
-  auto& model_valid = bipedal_controller->mpc_model_valid_;
-  if (!model_valid || !mpc->initialized() || params.sample_period != chassis.dt ||
-      (chassis.length - bipedal_controller->mpc_lengths_).cwiseAbs().maxCoeff() >
-          bipedal_controller->mpc_length_tolerance_ ||
-      (params.q.array() != config.q.array()).any() || (params.r.array() != config.r.array()).any())
-  {
-    model_valid = false;
-    auto next_params = params;
-    next_params.sample_period = chassis.dt;
-    next_params.q = config.q;
-    next_params.r = config.r;
-    try
-    {
-      model_valid = mpc->initialize(linearModel(config.model, chassis.length), next_params);
-      if (model_valid)
-      {
-        params = next_params;
-        bipedal_controller->mpc_lengths_ = chassis.length;
-      }
-    }
-    catch (const std::exception&)
-    {
-      mpc->reset();
-    }
-  }
-  if (!model_valid)
-    return false;
+  const auto& params = bipedal_controller->mpc_params_;
   auto& trajectory = bipedal_controller->mpc_reference_;
   for (int i = 0; i < params.horizon; ++i)
   {

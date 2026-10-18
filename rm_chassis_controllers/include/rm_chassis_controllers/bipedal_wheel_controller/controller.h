@@ -106,9 +106,6 @@ private:
   std::unique_ptr<mpc_backend> mpc_;
   mpc_backend::Params mpc_params_;
   mpc_backend::StateTrajectory mpc_reference_;
-  Eigen::Vector2d mpc_lengths_{Eigen::Vector2d::Zero()};
-  double mpc_length_tolerance_{.002};
-  bool mpc_model_valid_{false};
   GainUpdate polyfit(const State10 &q, const Input4 &r, DesignReport &report) const;
   void reconfigCB(LQRWeightConfig &config, uint32_t level);
   void configureLqrInterface(ros::NodeHandle &controller_nh);
