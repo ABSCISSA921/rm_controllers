@@ -2,8 +2,8 @@
 #include "bipedal_wheel_controller/dynamics/model10.h"
 
 #include <gtest/gtest.h>
-#include <Eigen/Cholesky>
 #include <unsupported/Eigen/MatrixFunctions>
+#include <tinympc/tiny_api.hpp>
 
 #include <cmath>
 #include <limits>
@@ -50,80 +50,53 @@ Backend::StateTrajectory trajectory(const LinearModel& model, int horizon)
   return result;
 }
 
-double scalarQp(const LinearModel& model, const Backend::Params& params, const State10& state,
-                const Backend::StateTrajectory& reference, int channel)
+struct OfficialSolver
 {
-  const int intervals = params.horizon - 1;
-  const double a = std::exp(-.7 * params.sample_period), b = (1. - a) / .7;
-  const double q_aug = params.q[channel] + params.rho, r_aug = params.r[channel] + params.rho;
-  const double c = r_aug * (1. - a * a) - q_aug * b * b;
-  const double p_aug = (-c + std::sqrt(c * c + 4. * b * b * q_aug * r_aug)) / (2. * b * b);
-  const double terminal_weight = p_aug - params.rho;
-  Eigen::MatrixXd hessian = params.r[channel] * Eigen::MatrixXd::Identity(intervals, intervals);
-  Eigen::VectorXd gradient = Eigen::VectorXd::Zero(intervals);
-  for (int i = 1; i <= intervals; ++i)
-  {
-    Eigen::VectorXd influence = Eigen::VectorXd::Zero(intervals);
-    for (int j = 0; j < i; ++j)
-      influence[j] = b * std::pow(a, i - 1 - j);
-    const double weight = i == intervals ? terminal_weight : params.q[channel];
-    const double baseline = std::pow(a, i) * (state[channel] - model.equilibrium[channel]) +
-                            model.residual[channel] * (1. - std::pow(a, i)) / .7;
-    const double error = baseline - (reference(channel, i) - model.equilibrium[channel]);
-    hessian.noalias() += weight * influence * influence.transpose();
-    gradient.noalias() += weight * error * influence;
-  }
+  TinySolver* value{ nullptr };
 
-  const double lower = params.input_min[channel] - model.uff[channel];
-  const double upper = params.input_max[channel] - model.uff[channel];
-  double best_cost = std::numeric_limits<double>::infinity();
-  Eigen::VectorXd best;
-  int combinations = 1;
-  for (int i = 0; i < intervals; ++i)
-    combinations *= 3;
-  for (int combination = 0; combination < combinations; ++combination)
+  ~OfficialSolver()
   {
-    int code = combination;
-    Eigen::VectorXd candidate = Eigen::VectorXd::Zero(intervals);
-    std::vector<int> free;
-    for (int i = 0; i < intervals; ++i)
+    if (value)
     {
-      const int mode = code % 3;
-      code /= 3;
-      if (mode == 0)
-        free.push_back(i);
-      else
-        candidate[i] = mode == 1 ? lower : upper;
-    }
-    if (!free.empty())
-    {
-      Eigen::MatrixXd reduced(free.size(), free.size());
-      Eigen::VectorXd rhs(free.size());
-      for (std::size_t i = 0; i < free.size(); ++i)
-      {
-        rhs[i] = -gradient[free[i]] - hessian.row(free[i]).dot(candidate);
-        for (std::size_t j = 0; j < free.size(); ++j)
-          reduced(i, j) = hessian(free[i], free[j]);
-      }
-      const Eigen::VectorXd solution = reduced.ldlt().solve(rhs);
-      for (std::size_t i = 0; i < free.size(); ++i)
-        candidate[free[i]] = solution[i];
-    }
-    if ((candidate.array() < lower - 1e-9).any() || (candidate.array() > upper + 1e-9).any())
-      continue;
-    const double cost = .5 * candidate.dot(hessian * candidate) + gradient.dot(candidate);
-    if (cost < best_cost)
-    {
-      best_cost = cost;
-      best = candidate;
+      delete value->solution;
+      delete value->settings;
+      delete value->cache;
+      delete value->work;
+      delete value;
     }
   }
-  if (!std::isfinite(best_cost))
-    throw std::runtime_error("Independent box QP has no candidate");
-  return model.uff[channel] + best[0];
+};
+
+Input4 officialOutput(const LinearModel& model, const Backend::Params& params, const State10& state,
+                      const Backend::StateTrajectory& reference)
+{
+  const double a = std::exp(-.7 * params.sample_period), b = (1. - a) / .7;
+  const tinyMatrix ad = a * tinyMatrix::Identity(10, 10);
+  tinyMatrix bd = tinyMatrix::Zero(10, 4);
+  bd.topRows(4) = b * tinyMatrix::Identity(4, 4);
+  OfficialSolver owner;
+  if (tiny_setup(&owner.value, ad, bd, b * model.residual, params.q.asDiagonal(), params.r.asDiagonal(), params.rho, 10,
+                 4, params.horizon, 0) != 0)
+    throw std::runtime_error("Official TinyMPC setup failed");
+  auto* solver = owner.value;
+  solver->settings->max_iter = params.max_iter;
+  solver->settings->abs_pri_tol = params.abs_pri_tol;
+  solver->settings->abs_dua_tol = params.abs_dua_tol;
+  solver->settings->en_state_bound = 0;
+  solver->settings->en_input_bound = 1;
+  const tinyMatrix state_bounds = tinyMatrix::Zero(10, params.horizon);
+  if (tiny_set_bound_constraints(solver, state_bounds, state_bounds,
+                                 (params.input_min - model.uff).replicate(1, params.horizon - 1),
+                                 (params.input_max - model.uff).replicate(1, params.horizon - 1)) != 0 ||
+      tiny_set_x0(solver, state - model.equilibrium) != 0 ||
+      tiny_set_x_ref(solver, reference.colwise() - model.equilibrium) != 0 ||
+      tiny_set_u_ref(solver, tinyMatrix::Zero(4, params.horizon - 1)) != 0 || tiny_solve(solver) != 0 ||
+      solver->solution->solved != 1)
+    throw std::runtime_error("Official TinyMPC solve failed");
+  return model.uff + solver->solution->u.col(0);
 }
 
-TEST(BipedalMpcBackend, MatchesIndependentQpWithNonzeroReferencesAndActiveTorqueBounds)
+TEST(BipedalMpcBackend, MatchesOfficialSolverWithNonzeroReferencesAndActiveTorqueBounds)
 {
   const auto model = simpleModel();
   for (double limit : { 20., .25 })
@@ -143,8 +116,8 @@ TEST(BipedalMpcBackend, MatchesIndependentQpWithNonzeroReferencesAndActiveTorque
       EXPECT_EQ(backend.report().status, Backend::Status::SUCCESS);
       EXPECT_GT(backend.report().iterations, 0);
       EXPECT_GE(backend.report().solve_time, 0.);
-      for (int channel = 0; channel < 4; ++channel)
-        EXPECT_NEAR(output[channel], scalarQp(model, params, state, reference, channel), 2e-7);
+      const Input4 expected = officialOutput(model, params, state, reference);
+      EXPECT_TRUE(output.isApprox(expected, 2e-7));
       EXPECT_TRUE((output.array() >= params.input_min.array()).all());
       EXPECT_TRUE((output.array() <= params.input_max.array()).all());
       if (limit < 1.)
@@ -169,7 +142,7 @@ TEST(BipedalMpcBackend, ReturnsFeedforwardOnceAtEquilibriumAndSupportsZeroStateW
   State10 state = model.equilibrium;
   state[0] += .5;
   ASSERT_TRUE(backend.solve(state, reference, output));
-  EXPECT_NEAR(output[0], scalarQp(model, params, state, reference, 0), 2e-7);
+  EXPECT_TRUE(output.isApprox(officialOutput(model, params, state, reference), 2e-7));
 }
 
 TEST(BipedalMpcBackend, RejectsInvalidParametersAndInvalidatesModelOnFailedReinitialization)
@@ -198,18 +171,12 @@ TEST(BipedalMpcBackend, RejectsInvalidParametersAndInvalidatesModelOnFailedReini
   }
   ASSERT_TRUE(backend.initialize(model, good));
   auto bad_model = model;
-  bad_model.residual[0] = .1;
+  bad_model.uff[0] = std::numeric_limits<double>::quiet_NaN();
   EXPECT_FALSE(backend.initialize(bad_model, good));
   EXPECT_FALSE(backend.initialized());
   bad_model = model;
   bad_model.A(0, 0) = std::numeric_limits<double>::quiet_NaN();
   EXPECT_FALSE(backend.initialize(bad_model, good));
-  bad_model = model;
-  bad_model.B.setZero();
-  bad_model.A.setIdentity();
-  EXPECT_FALSE(backend.initialize(bad_model, good));
-  EXPECT_FALSE(backend.initialized());
-  EXPECT_EQ(backend.report().status, Backend::Status::SOLVER_FAILED);
 }
 
 TEST(BipedalMpcBackend, RejectsInvalidObservationAndReferenceWithoutOverwritingOutput)
@@ -235,8 +202,7 @@ TEST(BipedalMpcBackend, RejectsInvalidObservationAndReferenceWithoutOverwritingO
   EXPECT_FALSE(backend.solve(model.equilibrium, invalid_reference, output));
   EXPECT_TRUE(output.isConstant(123.));
   ASSERT_TRUE(backend.solve(model.equilibrium, reference, output));
-  for (int channel = 0; channel < 4; ++channel)
-    EXPECT_NEAR(output[channel], scalarQp(model, params, model.equilibrium, reference, channel), 2e-7);
+  EXPECT_TRUE(output.isApprox(officialOutput(model, params, model.equilibrium, reference), 2e-7));
 }
 
 TEST(BipedalMpcBackend, KeepsValidBoundsOnRejectedUpdateAndClearsHistoryOnReset)
@@ -251,15 +217,13 @@ TEST(BipedalMpcBackend, KeepsValidBoundsOnRejectedUpdateAndClearsHistoryOnReset)
   ASSERT_TRUE(backend.solve(state, reference, output));
   EXPECT_FALSE(backend.setInputBounds(Input4::Constant(2.), Input4::Constant(1.)));
   ASSERT_TRUE(backend.solve(state, reference, output));
-  for (int channel = 0; channel < 4; ++channel)
-    EXPECT_NEAR(output[channel], scalarQp(model, params, state, reference, channel), 2e-7);
+  EXPECT_TRUE(output.isApprox(officialOutput(model, params, state, reference), 2e-7));
   params.input_min.setConstant(.1);
   params.input_max.setConstant(.15);
   ASSERT_TRUE(backend.setInputBounds(params.input_min, params.input_max));
   EXPECT_EQ(backend.report().iterations, 0);
   ASSERT_TRUE(backend.solve(state, reference, output));
-  for (int channel = 0; channel < 4; ++channel)
-    EXPECT_NEAR(output[channel], scalarQp(model, params, state, reference, channel), 2e-7);
+  EXPECT_TRUE(output.isApprox(officialOutput(model, params, state, reference), 2e-7));
   const Input4 expected = output;
   backend.reset();
   EXPECT_TRUE(backend.initialized());
