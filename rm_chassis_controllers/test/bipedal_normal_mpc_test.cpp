@@ -166,13 +166,12 @@ protected:
 TEST_F(BipedalNormalMpcTest, UsesCurrentObservationAndReturnsFeedforwardExactlyOnce)
 {
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);  // The first call solves immediately.
-  EXPECT_TRUE(feedback().active);
+  ASSERT_TRUE(feedback().active);  // The first call solves immediately.
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
   EXPECT_GT((feedback().output - controller_.getLqrConfig().uff).norm(), 1e-3);
   state().x[BODY_PITCH] = -.02;
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
 }
 
@@ -184,7 +183,7 @@ TEST_F(BipedalNormalMpcTest, DrivingKeepsZeroPositionOriginAndAdvancesOnlyPredic
   EXPECT_NEAR(feedback().reference[YAW], -.003, 1e-12);
   EXPECT_DOUBLE_EQ(feedback().reference[V], .4);
   EXPECT_DOUBLE_EQ(feedback().reference[YAW_RATE], -.3);
-  EXPECT_TRUE(feedback().mpc_active);
+  EXPECT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));  // Includes the complete moving trajectory.
   state().x[S] = .2;
   state().x[V] = 2.;
@@ -202,7 +201,7 @@ TEST_F(BipedalNormalMpcTest, ParkingIntegratesDriftWithoutMovingThePositionTarge
   integrate();
   EXPECT_NEAR(state().x[S], .0201, 1e-12);
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   EXPECT_DOUBLE_EQ(feedback().reference[S], 0.);
   EXPECT_NEAR(state().x[S], .0201, 1e-12);  // computeFeedback must not re-anchor at the drifting observation.
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
@@ -220,23 +219,23 @@ TEST_F(BipedalNormalMpcTest, ParkingIntegratesDriftWithoutMovingThePositionTarge
 TEST_F(BipedalNormalMpcTest, RebuildsForLengthsWeightsAndActualControlPeriod)
 {
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   reset();
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
   state().length << .25, .24;
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
   const State10 q = 2. * controller_.getLqrConfig().q;
   setWeights(q);
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
   state().dt = .005;
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   EXPECT_DOUBLE_EQ(params().sample_period, .005);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
 }
@@ -259,7 +258,7 @@ TEST_F(BipedalNormalMpcTest, DefaultSynchronousFeedbackStabilizesTheLinearPlant)
   for (int i = 0; i < 250; ++i)
   {
     ASSERT_TRUE(compute()) << "step=" << i;
-    ASSERT_TRUE(feedback().mpc_active) << "step=" << i;
+    ASSERT_TRUE(feedback().active) << "step=" << i;
     ASSERT_LE(feedback().output.head<2>().cwiseAbs().maxCoeff(), 3.58);
     state().x = model.equilibrium + discrete.topLeftCorner(10, 10) * (state().x - model.equilibrium) +
                 discrete.block(0, 10, 10, 4) * (feedback().output - model.uff) + discrete.block(0, 14, 10, 1);
@@ -275,14 +274,12 @@ TEST_F(BipedalNormalMpcTest, LateSolveRequestsProtectionAndClearsAllJointCommand
   feedback().output.setConstant(123.);
   EXPECT_FALSE(compute());
   EXPECT_FALSE(feedback().active);
-  EXPECT_FALSE(feedback().mpc_active);
   EXPECT_TRUE(feedback().output.isConstant(123.));  // No LQR or partially solved command replaces it.
   for (double& command : commands_)
     command = 42.;
   execute();
   EXPECT_EQ(controller_.getBalanceMode(), PROTECT);
   EXPECT_FALSE(feedback().active);
-  EXPECT_FALSE(feedback().mpc_active);
   EXPECT_FALSE(feedback().reference_valid);
   for (double command : commands_)
     EXPECT_DOUBLE_EQ(command, 0.);
@@ -297,7 +294,6 @@ TEST_F(BipedalNormalMpcTest, UnconvergedSolveRequestsProtectionAndClearsAllJoint
   execute();
   EXPECT_EQ(controller_.getBalanceMode(), PROTECT);
   EXPECT_FALSE(feedback().active);
-  EXPECT_FALSE(feedback().mpc_active);
   for (double command : commands_)
     EXPECT_DOUBLE_EQ(command, 0.);
 }
@@ -305,21 +301,20 @@ TEST_F(BipedalNormalMpcTest, UnconvergedSolveRequestsProtectionAndClearsAllJoint
 TEST_F(BipedalNormalMpcTest, FailedModelRebuildDoesNotUseThePreviousSolver)
 {
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   state().dt = std::numeric_limits<double>::max();  // Finite, but overflows discretization.
   EXPECT_FALSE(compute());
   EXPECT_FALSE(feedback().active);
-  EXPECT_FALSE(feedback().mpc_active);
   state().dt = .001;
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
 }
 
 TEST_F(BipedalNormalMpcTest, FailedModelInitializationRequestsProtection)
 {
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   State10 invalid_q = controller_.getLqrConfig().q;
   invalid_q[0] = -1.;
   setWeights(invalid_q);
@@ -328,7 +323,6 @@ TEST_F(BipedalNormalMpcTest, FailedModelInitializationRequestsProtection)
   execute();
   EXPECT_EQ(controller_.getBalanceMode(), PROTECT);
   EXPECT_FALSE(feedback().active);
-  EXPECT_FALSE(feedback().mpc_active);
   for (double command : commands_)
     EXPECT_DOUBLE_EQ(command, 0.);
 }
@@ -336,19 +330,17 @@ TEST_F(BipedalNormalMpcTest, FailedModelInitializationRequestsProtection)
 TEST_F(BipedalNormalMpcTest, ModeExitReentryAndJumpResetGroundFeedback)
 {
   ASSERT_TRUE(compute());
-  ASSERT_TRUE(feedback().mpc_active);
+  ASSERT_TRUE(feedback().active);
   requestMode(SIT_DOWN);
   EXPECT_FALSE(feedback().active);
-  EXPECT_FALSE(feedback().mpc_active);
   for (double command : commands_)
     EXPECT_DOUBLE_EQ(command, 0.);
   reenter();
   execute();
-  EXPECT_TRUE(feedback().mpc_active);  // Reentry can solve immediately without waiting for another thread.
+  EXPECT_TRUE(feedback().active);  // Reentry can solve immediately without waiting for another thread.
   jump();
   execute();
   EXPECT_FALSE(feedback().active);
-  EXPECT_FALSE(feedback().mpc_active);
 }
 
 TEST_F(BipedalNormalMpcTest, InvalidObservationRequestsProtectionBeforeWritingVmcCommands)

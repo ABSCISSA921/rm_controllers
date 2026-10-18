@@ -28,7 +28,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     for (auto *pid : legs_)
       pid->reset();
     feedback.active = false;
-    feedback.mpc_active = false;
     feedback.reference_valid = false;
     resetMpc();
     controller->setStateChange(true);
@@ -54,7 +53,6 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     jump_phase_ = LEG_RETRACTION;
     jump_dwell_ = 0.;
     feedback.active = false;
-    feedback.mpc_active = false;
     feedback.reference_valid = false;
     resetMpc();
     ROS_INFO("[balance] Jump start: original axial stages with mechanical swing PID");
@@ -190,7 +188,6 @@ void Normal::requestMode(int mode)
     bipedal_controller->chassis_state_.x[S] = 0.;
   auto &result = controller->getNormalFeedback();
   result.active = result.reference_valid = false;
-  result.mpc_active = false;
   resetMpc();
   controller->setMode(mode);
   controller->setStateChange(false);
@@ -276,7 +273,6 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
   auto* bipedal_controller = static_cast<BipedalController*>(controller);
   auto* mpc = bipedal_controller->mpc_.get();
   feedback.active = false;
-  feedback.mpc_active = false;
   if (!mpc || !chassis.x.allFinite() || !chassis.length.allFinite() ||
       (chassis.length.array() < config.model.geometry_domain[0]).any() ||
       (chassis.length.array() > config.model.geometry_domain[1]).any() || !std::isfinite(chassis.dt) ||
@@ -348,7 +344,6 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
     return false;
   feedback.output = output;
   feedback.active = true;
-  feedback.mpc_active = true;
   return true;
 }
 

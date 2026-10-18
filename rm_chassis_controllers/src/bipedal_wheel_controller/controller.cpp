@@ -115,7 +115,6 @@ void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &pe
   if (balance_mode_ != NORMAL)
   {
     normal_feedback_.active = false;
-    normal_feedback_.mpc_active = false;
     normal_feedback_.reference_valid = false;
     integrateVelocity(); // Mechanical modes use the current kinematic speed.
   }

@@ -70,8 +70,7 @@ struct NormalFeedback
   bool reference_valid{false};
   Input4 output{Input4::Zero()}; // U4 consumed by VMC/wheels and the compatibility status.
   Eigen::Vector2d axial_force{Eigen::Vector2d::Zero()}; // F consumed by VMC and the same status.
-  bool active{false}; // Selects Normal U4/F for status publication; does not authorize control.
-  bool mpc_active{false}; // True only when the current Normal output came from a successful MPC solve.
+  bool active{false}; // Current-cycle MPC solve succeeded; selects Normal U4/F for status publication.
 };
 
 struct ControlParams

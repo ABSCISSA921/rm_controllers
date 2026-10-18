@@ -274,7 +274,7 @@ Normal 直接调用 `mpc_backend::solve()`，使用本周期观测生成 `10×N`
 
 已移除后台线程、请求/结果队列、代次标记及异步结果时效检查。旧的 `mpc/sample_period`、`max_result_age`、`velocity_tolerance` 和 `yaw_rate_tolerance` 参数不再使用。
 
-Normal 只接受本周期成功的 MPC 输出，不再计算 LQR 增益或回退输入。模型初始化失败、求解未收敛、结果超时，或观测/参考/静态平衡点无效时，`computeFeedback()` 返回失败，由 `execute()` 请求进入 PROTECT，并清零本周期全部关节命令。反馈标志失效后不会将旧 MPC 输出作为当前命令使用；`NormalFeedback::mpc_active` 仅在本周期 MPC 求解成功后置位。现有兼容状态话题继续发布实际使用的 U4/F。
+Normal 只接受本周期成功的 MPC 输出，不再计算 LQR 增益或回退输入。模型初始化失败、求解未收敛、结果超时，或观测/参考/静态平衡点无效时，`computeFeedback()` 返回失败，由 `execute()` 请求进入 PROTECT，并清零本周期全部关节命令。反馈标志失效后不会将旧 MPC 输出作为当前命令使用；`NormalFeedback::active` 统一表示本周期 MPC 求解成功，仅在成功时置位，求解开始、失败或退出 Normal 时清零。现有兼容状态话题继续发布实际使用的 U4/F。
 
 模型重建和求解都在控制线程中同步执行，包含动态内存分配。`max_solve_time` 只检查 `solve()` 内部耗时，不覆盖模型重建，也不能抢占求解。控制周期抖动导致采样周期变化时也会重建模型；本实现尚未证明硬实时性或实机稳定性。虚拟腿不限幅不提供 VMC 后髋/膝关节的力矩保证。
 
