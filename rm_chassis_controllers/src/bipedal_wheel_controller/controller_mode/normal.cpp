@@ -183,7 +183,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
 
 void Normal::requestMode(int mode)
 {
-  // All Normal action exits occur before the ground KF/feedback branch.
+  // Clear mode state and commands for both action exits and feedback failures.
   auto* bipedal_controller = static_cast<BipedalController*>(controller);
   bipedal_controller->integrateVelocity();
   if (mode == PROTECT || mode == SIT_DOWN)
@@ -275,16 +275,22 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
   const auto& config = controller->getLqrConfig();
   auto* bipedal_controller = static_cast<BipedalController*>(controller);
   auto* mpc = bipedal_controller->mpc_.get();
+  feedback.active = false;
   feedback.mpc_active = false;
   if (!mpc || !chassis.x.allFinite() || !chassis.length.allFinite() ||
       (chassis.length.array() < config.model.geometry_domain[0]).any() ||
       (chassis.length.array() > config.model.geometry_domain[1]).any() || !std::isfinite(chassis.dt) ||
       chassis.dt <= 0. || !std::isfinite(velocity) || !std::isfinite(yaw_rate))
     return false;
-  Gain10 gain;
-  Input4 feedforward;
   State10 equilibrium;
-  evaluate(config, chassis.length, gain, feedforward, &equilibrium);
+  try
+  {
+    equilibrium = staticEquilibrium(config.model, chassis.length, config.uff);
+  }
+  catch (const std::exception&)
+  {
+    return false;
+  }
   if (!feedback.reference_valid)
   {
     feedback.reference.setZero();
@@ -329,27 +335,20 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
       mpc->reset();
     }
   }
-  if (model_valid)
+  if (!model_valid)
+    return false;
+  auto& trajectory = bipedal_controller->mpc_reference_;
+  for (int i = 0; i < params.horizon; ++i)
   {
-    auto& trajectory = bipedal_controller->mpc_reference_;
-    for (int i = 0; i < params.horizon; ++i)
-    {
-      trajectory.col(i) = feedback.reference;
-      trajectory(S, i) += velocity * params.sample_period * i;
-      trajectory(YAW, i) += yaw_rate * params.sample_period * i;
-    }
-    feedback.mpc_active = mpc->solve(chassis.x, trajectory, output);
+    trajectory.col(i) = feedback.reference;
+    trajectory(S, i) += velocity * params.sample_period * i;
+    trajectory(YAW, i) += yaw_rate * params.sample_period * i;
   }
-  if (!feedback.mpc_active)
-  {
-    // Recompute from this observation; never reuse a rejected/old MPC command or add feedforward twice.
-    output = feedforward - gain * (chassis.x - feedback.reference);
-    if (!gain.allFinite() || !feedforward.allFinite() || !output.allFinite())
-      return false;
-    output = output.cwiseMax(params.input_min).cwiseMin(params.input_max);
-  }
+  if (!mpc->solve(chassis.x, trajectory, output))
+    return false;
   feedback.output = output;
   feedback.active = true;
+  feedback.mpc_active = true;
   return true;
 }
 

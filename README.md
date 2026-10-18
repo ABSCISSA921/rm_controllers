@@ -18,7 +18,7 @@
 
 `RM_BUILD_BIPEDAL` 默认 `OFF`。普通机器人直接执行 `catkin build`，不编译轮腿源码，也不查找、构建或下载 TinyMPC。轮腿使用者显式开启一次后，选择保存在该包的 `CMakeCache.txt` 中，后续仍直接执行 `catkin build`，不需要 profile。
 
-轮腿 `Normal` 的地面四维反馈已接入 TinyMPC。`Normal` 在当前控制周期直接调用后端，使用当前观测和参考轨迹同步求解。求解或模型更新失败时使用本周期重新计算并限幅的十状态 LQR。配置和执行边界见本文末尾。
+轮腿 `Normal` 的地面四维反馈已接入 TinyMPC。`Normal` 在当前控制周期直接调用后端，使用当前观测和参考轨迹同步求解。求解或模型更新失败时请求进入 PROTECT，并将本周期关节命令清零。配置和执行边界见本文末尾。
 
 轮腿构建只使用 `RM_BUILD_BIPEDAL` 一个开关：
 
@@ -172,7 +172,7 @@ catkin build rm_chassis_controllers --cmake-args \
 catkin build
 ```
 
-应生成 `devel/lib/librm_bipedal_controllers.so`。`BipedalController` 初始化时预检查 MPC 后端；Normal 地面反馈在当前周期同步求解，失败时使用当前观测计算的 LQR 回退。
+应生成 `devel/lib/librm_bipedal_controllers.so`。`BipedalController` 初始化时预检查 MPC 后端；Normal 地面反馈在当前周期同步求解，失败时请求进入 PROTECT，并将本周期关节命令清零。
 
 如果 SDK 不存在，普通 OFF 构建仍然成功；`RM_BUILD_BIPEDAL=ON` 的构建应失败。`RmTinyMPC_DIR` 是包级提示路径，不需要全局增加安装前缀。
 
@@ -268,13 +268,13 @@ mpc:
   length_tolerance: 0.002  # 米；任一腿变化超过此值时重建完整模型/缓存
 ```
 
-继续使用已有十状态 `q`、四输入 `r` 和 `lqr_model` 物理参数；六状态旧配置仍需先迁移到当前控制器要求的十状态配置。动态 Q/R 更新与 LQR 使用同一份快照，后端完整重新初始化后才使用新权重求解。MPC 参数在控制器初始化时读取，修改这些参数后需重新加载控制器。
+继续使用已有十状态 `q`、四输入 `r` 和 `lqr_model` 物理参数；六状态旧配置仍需先迁移到当前控制器要求的十状态配置。动态 Q/R 更新沿用现有权重配置入口，后端完整重新初始化后才使用当前权重快照求解。MPC 参数在控制器初始化时读取，修改这些参数后需重新加载控制器。
 
-Normal 直接调用 `mpc_backend::solve()`，使用本周期观测生成 `10×N` 的预测参考，并立即采用本次求解的首步总输入。预测采样周期取当前 `chassis.dt`，与控制周期一致。腿长变化超过容差、Q/R 变化或控制周期变化时，先重建完整求解器及缓存，再求解；初始化失败则走 LQR，恢复有效输入后重试。
+Normal 直接调用 `mpc_backend::solve()`，使用本周期观测生成 `10×N` 的预测参考，并立即采用本次求解的首步总输入。预测采样周期取当前 `chassis.dt`，与控制周期一致。腿长变化超过容差、Q/R 变化或控制周期变化时，先重建完整求解器及缓存，再求解；初始化失败直接请求进入 PROTECT；重新进入 Normal 后按当前模型与参数重新尝试。
 
 已移除后台线程、请求/结果队列、代次标记及异步结果时效检查。旧的 `mpc/sample_period`、`max_result_age`、`velocity_tolerance` 和 `yaw_rate_tolerance` 参数不再使用。
 
-无有效结果时，Normal 基于当前观测重算 `u_ff - K(x-x_ref)`，并施加相同轮力矩限幅；不会重用失败的 MPC 命令。观测、参考或 LQR 回退无效时进入 PROTECT，并在本周期将关节命令清零。`NormalFeedback::mpc_active` 记录本周期是否采用 MPC，现有兼容状态话题继续发布实际使用的 U4/F。
+Normal 只接受本周期成功的 MPC 输出，不再计算 LQR 增益或回退输入。模型初始化失败、求解未收敛、结果超时，或观测/参考/静态平衡点无效时，`computeFeedback()` 返回失败，由 `execute()` 请求进入 PROTECT，并清零本周期全部关节命令。反馈标志失效后不会将旧 MPC 输出作为当前命令使用；`NormalFeedback::mpc_active` 仅在本周期 MPC 求解成功后置位。现有兼容状态话题继续发布实际使用的 U4/F。
 
 模型重建和求解都在控制线程中同步执行，包含动态内存分配。`max_solve_time` 只检查 `solve()` 内部耗时，不覆盖模型重建，也不能抢占求解。控制周期抖动导致采样周期变化时也会重建模型；本实现尚未证明硬实时性或实机稳定性。虚拟腿不限幅不提供 VMC 后髋/膝关节的力矩保证。
 
@@ -288,4 +288,4 @@ source devel/setup.bash
 rostest rm_chassis_controllers bipedal_normal_mpc.test
 ```
 
-回归覆盖真实 Normal 的同步后端输出与单次前馈、预测窗口内移动参考、行驶位移清零和停车漂移保持、腿长/权重/控制周期更新、模型重建失败、超时回退、模式重入、轮力矩限幅及非法观测保护；后端测试同时覆盖轮受限而虚拟腿不受限的求解。
+回归覆盖真实 Normal 的同步后端输出与单次前馈、预测窗口内移动参考、行驶位移清零和停车漂移保持、腿长/权重/控制周期更新、模型重建失败保护、未收敛/超时保护、模式重入、轮力矩限幅及非法观测保护；后端测试同时覆盖轮受限而虚拟腿不受限的求解。

@@ -35,9 +35,8 @@ protected:
     config.uff = staticFeedforward(physical);
     config.q << 5., 5., 10., 1., 50., 2., 50., 2., 100., 5.;
     config.r << .5, .5, 1., 1.;
-    // Deliberately different fallback gains, so the test detects a Normal that never consumes MPC.
-    config.coeffs(0, 4 * V) = 10.;
-    config.coeffs(0, 1 + 4 * V) = 10.;
+    // Normal must not depend on an LQR gain table, even when the MPC solve fails.
+    config.coeffs.setConstant(std::numeric_limits<double>::quiet_NaN());
     config.wheel_radius = physical.Rw;
     controller_.chassis_state_.length.setConstant(.22);
     controller_.chassis_state_.dt = .001;
@@ -69,12 +68,12 @@ protected:
     startBackend();
   }
 
-  void startBackend(double solve_budget = 0.)
+  void startBackend(double solve_budget = 0., int max_iter = 10000)
   {
     auto& params = controller_.mpc_params_;
     params.sample_period = state().dt;
     params.horizon = 21;
-    params.max_iter = 10000;
+    params.max_iter = max_iter;
     params.abs_pri_tol = params.abs_dua_tol = 1e-7;
     params.max_solve_time = solve_budget;
     params.q = controller_.lqr_config_.q;
@@ -270,21 +269,37 @@ TEST_F(BipedalNormalMpcTest, DefaultSynchronousFeedbackStabilizesTheLinearPlant)
   EXPECT_LT((state().x - reference).norm(), .5 * initial_error);
 }
 
-TEST_F(BipedalNormalMpcTest, FailedSolveFallsBackToCurrentStateAndClipsOnlyWheels)
+TEST_F(BipedalNormalMpcTest, LateSolveRequestsProtectionAndClearsAllJointCommands)
 {
   startBackend(1e-12);  // Reject the result after the synchronous solver finishes.
-  state().x[V] = 100.;
-  ASSERT_TRUE(compute());
+  feedback().output.setConstant(123.);
+  EXPECT_FALSE(compute());
+  EXPECT_FALSE(feedback().active);
   EXPECT_FALSE(feedback().mpc_active);
-  EXPECT_DOUBLE_EQ(feedback().output[0], -3.58);
-  EXPECT_DOUBLE_EQ(feedback().output[1], -3.58);
-  state().x[V] = -100.;
-  ASSERT_TRUE(compute());
+  EXPECT_TRUE(feedback().output.isConstant(123.));  // No LQR or partially solved command replaces it.
+  for (double& command : commands_)
+    command = 42.;
+  execute();
+  EXPECT_EQ(controller_.getBalanceMode(), PROTECT);
+  EXPECT_FALSE(feedback().active);
   EXPECT_FALSE(feedback().mpc_active);
-  EXPECT_DOUBLE_EQ(feedback().output[0], 3.58);
-  EXPECT_DOUBLE_EQ(feedback().output[1], 3.58);
-  EXPECT_TRUE(std::isinf(params().input_max[2]));
-  EXPECT_TRUE(std::isinf(params().input_max[3]));
+  EXPECT_FALSE(feedback().reference_valid);
+  for (double command : commands_)
+    EXPECT_DOUBLE_EQ(command, 0.);
+}
+
+TEST_F(BipedalNormalMpcTest, UnconvergedSolveRequestsProtectionAndClearsAllJointCommands)
+{
+  startBackend(0., 1);
+  state().x[BODY_PITCH] = .1;
+  for (double& command : commands_)
+    command = 42.;
+  execute();
+  EXPECT_EQ(controller_.getBalanceMode(), PROTECT);
+  EXPECT_FALSE(feedback().active);
+  EXPECT_FALSE(feedback().mpc_active);
+  for (double command : commands_)
+    EXPECT_DOUBLE_EQ(command, 0.);
 }
 
 TEST_F(BipedalNormalMpcTest, FailedModelRebuildDoesNotUseThePreviousSolver)
@@ -292,12 +307,30 @@ TEST_F(BipedalNormalMpcTest, FailedModelRebuildDoesNotUseThePreviousSolver)
   ASSERT_TRUE(compute());
   ASSERT_TRUE(feedback().mpc_active);
   state().dt = std::numeric_limits<double>::max();  // Finite, but overflows discretization.
-  ASSERT_TRUE(compute());
+  EXPECT_FALSE(compute());
+  EXPECT_FALSE(feedback().active);
   EXPECT_FALSE(feedback().mpc_active);
   state().dt = .001;
   ASSERT_TRUE(compute());
   ASSERT_TRUE(feedback().mpc_active);
   EXPECT_TRUE(feedback().output.isApprox(directOutput(), 1e-5));
+}
+
+TEST_F(BipedalNormalMpcTest, FailedModelInitializationRequestsProtection)
+{
+  ASSERT_TRUE(compute());
+  ASSERT_TRUE(feedback().mpc_active);
+  State10 invalid_q = controller_.getLqrConfig().q;
+  invalid_q[0] = -1.;
+  setWeights(invalid_q);
+  for (double& command : commands_)
+    command = 42.;
+  execute();
+  EXPECT_EQ(controller_.getBalanceMode(), PROTECT);
+  EXPECT_FALSE(feedback().active);
+  EXPECT_FALSE(feedback().mpc_active);
+  for (double command : commands_)
+    EXPECT_DOUBLE_EQ(command, 0.);
 }
 
 TEST_F(BipedalNormalMpcTest, ModeExitReentryAndJumpResetGroundFeedback)
