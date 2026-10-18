@@ -1,0 +1,6 @@
+<launch>
+  <test test-name="chassis_plugin_load_test"
+        pkg="rm_chassis_controllers"
+        type="chassis_plugin_load_test"
+        time-limit="30.0"/>
+</launch>

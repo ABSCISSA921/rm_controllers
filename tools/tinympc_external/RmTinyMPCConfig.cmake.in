@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+find_dependency(Eigen3 3.3.7 EXACT CONFIG)
+set(RmTinyMPC_UPSTREAM_REVISION "@RM_TINYMPC_REVISION@")
+set(RmTinyMPC_EIGEN_VERSION "3.3.7")
+set(RmTinyMPC_EIGEN33_COMPAT "@RM_TINYMPC_EIGEN33_COMPAT@")
+include("${CMAKE_CURRENT_LIST_DIR}/RmTinyMPCTargets.cmake")
+check_required_components(RmTinyMPC)
