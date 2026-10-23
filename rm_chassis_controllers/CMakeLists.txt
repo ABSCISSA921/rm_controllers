@@ -84,6 +84,7 @@ set(BIPEDAL_SOURCES
         src/bipedal_wheel_controller/dynamics/model10.cpp
         src/bipedal_wheel_controller/dynamics/design10.cpp
         src/bipedal_wheel_controller/mpc/mpc_backend.cpp
+        src/bipedal_wheel_controller/mpc/mpc_bank.cpp
         src/bipedal_wheel_controller/controller.cpp
         src/bipedal_wheel_controller/controller_mode/mode_base.cpp
         src/bipedal_wheel_controller/controller_mode/mode_manager.cpp
@@ -195,6 +196,11 @@ install(
 if(CATKIN_ENABLE_TESTING)
   find_package(rostest REQUIRED)
   if(RM_BUILD_BIPEDAL)
+    add_rostest_gtest(bipedal_mpc_bank_test test/bipedal_mpc_bank.test test/bipedal_mpc_bank_test.cpp)
+    if(TARGET bipedal_mpc_bank_test)
+      target_link_libraries(bipedal_mpc_bank_test rm_bipedal_controllers ${PROJECT_NAME} ${catkin_LIBRARIES})
+      add_dependencies(bipedal_mpc_bank_test ${PROJECT_NAME}_gencfg ${catkin_EXPORTED_TARGETS})
+    endif()
     add_rostest_gtest(bipedal_observation_test test/bipedal_observation.test test/bipedal_observation_test.cpp)
     if(TARGET bipedal_observation_test)
       target_link_libraries(bipedal_observation_test rm_bipedal_controllers ${PROJECT_NAME} ${catkin_LIBRARIES})

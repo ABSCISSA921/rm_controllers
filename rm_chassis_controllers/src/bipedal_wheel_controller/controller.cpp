@@ -4,6 +4,7 @@
 
 #include "bipedal_wheel_controller/controller.h"
 #include <urdf/model.h>
+#include <algorithm>
 #include <limits>
 
 #include <angles/angles.h>
@@ -92,10 +93,6 @@ bool BipedalController::down5cmStairSrvCallback(std_srvs::Trigger::Request &req,
 
 void BipedalController::moveJoint(const ros::Time &time, const ros::Duration &period)
 {
-  const auto &gain = *gain_update_buffer_.readFromRT();
-  lqr_config_.coeffs = gain.coeffs;
-  lqr_config_.q = gain.q;
-  lqr_config_.r = gain.r;
   ++status_cycle_seq_;
   const bool status_due = time.toSec() - last_status_time_ >= .01 || time.toSec() < last_status_time_;
   if (status_due)
@@ -315,6 +312,7 @@ void BipedalController::pubState()
 
 void BipedalController::starting(const ros::Time &time)
 {
+  mpc_bank_.reset();
   normal_feedback_ = NormalFeedback{};
   velocity_kf_.reset();
   balance_mode_ = SIT_DOWN;
@@ -332,6 +330,7 @@ void BipedalController::starting(const ros::Time &time)
 
 void BipedalController::stopping(const ros::Time &time)
 {
+  mpc_bank_.reset();
   velocity_kf_.reset();
   normal_feedback_ = NormalFeedback{};
   balance_mode_ = BalanceMode::SIT_DOWN;
@@ -365,7 +364,7 @@ bool BipedalController::setupParams(ros::NodeHandle &controller_nh)
       !setupChassisGeometryParams(controller_nh))
     return false;
   setupVelocityEstimator(controller_nh);
-  return setupLQR(controller_nh) && setupMpc(controller_nh);
+  return setupFeedbackParams(controller_nh) && setupMpc(controller_nh);
 }
 
 bool BipedalController::setupModelParams(ros::NodeHandle &controller_nh)
@@ -664,7 +663,7 @@ bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, Config &co
   return true;
 }
 
-bool BipedalController::setupLQR(ros::NodeHandle &controller_nh)
+bool BipedalController::setupFeedbackParams(ros::NodeHandle& controller_nh)
 {
   Config config;
   if (!loadLqrParams(controller_nh, config))
@@ -673,18 +672,11 @@ bool BipedalController::setupLQR(ros::NodeHandle &controller_nh)
     return false;
   if ((config.q.array() < 0.).any() || (config.r.array() <= 0.).any())
   {
-    ROS_ERROR("Failed to compute K of LQR: Q must be positive semidefinite and R positive definite.");
+    ROS_ERROR("[mpc] Q must be positive semidefinite and R positive definite");
     return false;
   }
 
-  design_config_ = config;
-  DesignReport report;
-  const auto generated = polyfit(config.q, config.r, report);
-  config.coeffs = generated.coeffs;
   lqr_config_ = config;
-  gain_update_buffer_.initRT(generated);
-  ROS_INFO("[lqr10] generated from controller source: %u CARE, %u validation points, fit=%g trim=%g pole=%g",
-           report.nodes, report.validation_points, report.fit_error, report.equilibrium_error, report.max_real);
   return true;
 }
 
@@ -711,72 +703,98 @@ bool BipedalController::setupMpc(ros::NodeHandle& nh)
   const double unlimited = std::numeric_limits<double>::infinity();
   params.input_min << -wheel_limit, -wheel_limit, -unlimited, -unlimited;
   params.input_max << wheel_limit, wheel_limit, unlimited, unlimited;
-  bool model_valid = false;
-  mpc_.reset(new mpc_backend);
+  const auto& domain = lqr_config_.model.geometry_domain;
+  if (!domain.allFinite() || domain[0] >= domain[1] || !std::isfinite(default_leg_length_) ||
+      default_leg_length_ < domain[0] || default_leg_length_ > domain[1])
+  {
+    ROS_ERROR("[mpc] Invalid length domain or default_leg_length outside domain");
+    return false;
+  }
+  std::vector<double> lengths;
+  if (nh.hasParam("mpc/leg_lengths"))
+  {
+    if (!nh.getParam("mpc/leg_lengths", lengths))
+    {
+      ROS_ERROR("[mpc] leg_lengths must be an increasing numeric array covering the length domain");
+      return false;
+    }
+  }
+  else
+  {
+    for (int i = 0; i < 12; ++i)
+      lengths.push_back(domain[0] + (domain[1] - domain[0]) * i / 11.);
+    lengths.back() = domain[1];
+    if (std::none_of(lengths.begin(), lengths.end(),
+                     [&](double length) { return std::abs(length - default_leg_length_) < 1e-9; }))
+      lengths.push_back(default_leg_length_);
+    std::sort(lengths.begin(), lengths.end());
+  }
+  double hysteresis = .0005;
+  nh.param("mpc/length_hysteresis", hysteresis, hysteresis);
+  const auto start = ros::WallTime::now();
   try
   {
-    model_valid = mpc_->initialize(linearModel(lqr_config_.model, Eigen::Vector2d::Constant(default_leg_length_)), params);
-    if (model_valid)
-      mpc_reference_.resize(10, params.horizon);
+    if (!mpc_bank_.initialize(lqr_config_.model, params, lengths, hysteresis))
+    {
+      ROS_ERROR("[mpc] Bank initialization failed: check model/settings, increasing leg_lengths with domain endpoints, "
+                "and nonnegative length_hysteresis smaller than half the minimum grid spacing");
+      return false;
+    }
+    mpc_reference_.resize(10, params.horizon);
   }
   catch (const std::exception& ex)
   {
-    ROS_ERROR("[mpc] Backend initialization failed: %s", ex.what());
-    model_valid = false;
-  }
-  if (!model_valid)
-  {
-    ROS_ERROR("[mpc] Invalid model/settings or backend initialization failed");
-    mpc_.reset();
+    ROS_ERROR("[mpc] Bank initialization failed: %s", ex.what());
     return false;
   }
-  ROS_INFO("[mpc] Synchronous Normal feedback: fixed 1 kHz model, no runtime rebuild, "
-           "N=%d wheel bounds=+-%g Nm, virtual legs unbounded",
-           params.horizon, wheel_limit);
+  ROS_INFO("[mpc] Built %zu backends (%zu x %zu) in %.3f s: fixed 1 kHz, N=%d, "
+           "hysteresis=%g m, wheel bounds=+-%g Nm, virtual legs unbounded; Q/R require reload",
+           mpc_bank_.size(), lengths.size(), lengths.size(), (ros::WallTime::now() - start).toSec(), params.horizon,
+           hysteresis, wheel_limit);
   return true;
 }
 
-GainUpdate BipedalController::polyfit(const State10 &q, const Input4 &r,
-                                     DesignReport &report) const
+namespace
 {
-  return designTable(design_config_, q, r, report);
-}
-void BipedalController::configureLqrInterface(ros::NodeHandle &nh)
+LQRWeightConfig fixedMpcWeights(const Config& config)
 {
   LQRWeightConfig weights;
-  weights.Q_s = lqr_config_.q[0];
-  weights.Q_v = lqr_config_.q[1];
-  weights.Q_yaw = lqr_config_.q[2];
-  weights.Q_yaw_rate = lqr_config_.q[3];
-  weights.Q_theta_L = lqr_config_.q[4];
-  weights.Q_dtheta_L = lqr_config_.q[5];
-  weights.Q_theta_R = lqr_config_.q[6];
-  weights.Q_dtheta_R = lqr_config_.q[7];
-  weights.Q_phi = lqr_config_.q[8];
-  weights.Q_phi_dot = lqr_config_.q[9];
-  weights.R_T_L = lqr_config_.r[0];
-  weights.R_T_R = lqr_config_.r[1];
-  weights.R_Tp_L = lqr_config_.r[2];
-  weights.R_Tp_R = lqr_config_.r[3];
+  weights.Q_s = config.q[0];
+  weights.Q_v = config.q[1];
+  weights.Q_yaw = config.q[2];
+  weights.Q_yaw_rate = config.q[3];
+  weights.Q_theta_L = config.q[4];
+  weights.Q_dtheta_L = config.q[5];
+  weights.Q_theta_R = config.q[6];
+  weights.Q_dtheta_R = config.q[7];
+  weights.Q_phi = config.q[8];
+  weights.Q_phi_dot = config.q[9];
+  weights.R_T_L = config.r[0];
+  weights.R_T_R = config.r[1];
+  weights.R_Tp_L = config.r[2];
+  weights.R_Tp_R = config.r[3];
+  weights.update_status = "read_only: reload controller to rebuild MPC bank";
+  return weights;
+}
+}  // namespace
+
+void BipedalController::configureLqrInterface(ros::NodeHandle &nh)
+{
   lqr_server_ = std::make_unique<dynamic_reconfigure::Server<LQRWeightConfig>>(nh);
+  auto weights = fixedMpcWeights(lqr_config_);
   lqr_server_->updateConfig(weights);
   lqr_server_->setCallback(boost::bind(&BipedalController::reconfigCB, this, _1, _2));
 }
 void BipedalController::reconfigCB(LQRWeightConfig &request, uint32_t /*level*/)
 {
-  if (first_reconfigure_)
-  {
-    first_reconfigure_ = false;
-    return;
-  }
   State10 q;
   Input4 r;
   q << request.Q_s, request.Q_v, request.Q_yaw, request.Q_yaw_rate, request.Q_theta_L, request.Q_dtheta_L,
       request.Q_theta_R, request.Q_dtheta_R, request.Q_phi, request.Q_phi_dot;
   r << request.R_T_L, request.R_T_R, request.R_Tp_L, request.R_Tp_R;
-  DesignReport report;
-  gain_update_buffer_.writeFromNonRT(polyfit(q, r, report));
-  ROS_INFO("[lqr10] Q/R generated: CARE=%g pole=%g", report.care_residual, report.max_real);
+  if ((q.array() != lqr_config_.q.array()).any() || (r.array() != lqr_config_.r.array()).any())
+    ROS_WARN("[mpc] Q/R are read-only; reload the controller to rebuild the backend bank with new weights");
+  request = fixedMpcWeights(lqr_config_);
 }
 
 } // namespace rm_chassis_controllers
