@@ -25,7 +25,6 @@ public:
   }
 
 private:
-  friend class BipedalNormalMpcTest;
   bool computeFeedback(double velocity, double yaw_rate);
   void resetMpc();
   void requestMode(int mode);

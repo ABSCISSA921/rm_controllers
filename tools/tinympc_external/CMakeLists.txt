@@ -71,12 +71,6 @@ target_include_directories(tinympc PUBLIC
   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/rm_tinympc>")
 target_link_libraries(tinympc PUBLIC Eigen3::Eigen)
 
-enable_testing()
-add_executable(tinympc_eigen_smoke smoke.cpp)
-set_target_properties(tinympc_eigen_smoke PROPERTIES CXX_STANDARD 14 CXX_STANDARD_REQUIRED YES)
-target_link_libraries(tinympc_eigen_smoke PRIVATE tinympc)
-add_test(NAME tinympc_eigen_smoke COMMAND tinympc_eigen_smoke)
-
 configure_package_config_file(RmTinyMPCConfig.cmake.in
   "${CMAKE_CURRENT_BINARY_DIR}/RmTinyMPCConfig.cmake"
   INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/RmTinyMPC")

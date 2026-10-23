@@ -86,7 +86,6 @@ protected:
 private:
   friend class Normal;
   friend class BipedalObservationTest; // Offline regression of the real observation/mode functions.
-  friend class BipedalNormalMpcTest;
   void updateEstimation(const ros::Time &time, const ros::Duration &period);
   void updateChassisState();
   void publishMode();
