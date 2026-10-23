@@ -226,8 +226,6 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
       force = -action.off_ground_force * (1. - 3. * flipped * flipped + 2. * flipped * flipped * flipped);
     }
     commands[side].force = force - controller->f_spring_force(pos.L0);
-    // The ground K10 is not used during the jump action.
-    // This is the original action's mechanical PID port, replacing only the old K6 flight row.
     commands[side].torque = thetas_[side]->computeCommand(-pos.theta, period);
     leg.vmc->leg_conv(commands[side].force, commands[side].torque, commands[side].input);
   }
