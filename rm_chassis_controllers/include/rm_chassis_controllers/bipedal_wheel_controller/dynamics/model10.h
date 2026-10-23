@@ -3,6 +3,7 @@
 
 namespace rm_chassis_controllers
 {
+// Stateless model/design routines; Normal uses evaluate() for poly33 and analytic trim.
 struct LinearModel
 {
   Eigen::Matrix<double, 10, 10> A{ Eigen::Matrix<double, 10, 10>::Zero() };

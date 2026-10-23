@@ -48,7 +48,6 @@ if(RM_TINYMPC_EIGEN33_COMPAT)
   replace_required(codegen.cpp "mat.reshaped<RowMajor>()[i]" "mat(i / mat.cols(), i % mat.cols())")
 endif()
 
-# Avoid per-solve console output in the controller loop.
 replace_required(admm.cpp
   [=[            std::cout << "Solver converged in " << solver->work->iter << " iterations" << std::endl;
 ]=] "")

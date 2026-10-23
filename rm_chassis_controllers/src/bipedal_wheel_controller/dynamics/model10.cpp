@@ -131,6 +131,7 @@ Input4 staticFeedforward(const PhysicalModel& p)
 State10 staticEquilibrium(const PhysicalModel& p, const Eigen::Vector2d& lengths, const Input4& uff)
 {
   const auto equilibrium = equilibriumFromLegs(p, physicalLegs(p, lengths), uff);
+  // Non-RT model construction needs a real trim; runtime evaluation remains unchecked.
   if (!equilibrium.allFinite())
     throw std::invalid_argument("nonfinite static equilibrium");
   return equilibrium;

@@ -63,6 +63,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     return;
   }
   const auto command = controller->getVelCmd();
+  // Original automatic stair trigger, evaluated before ground-LQR feedback.
   if (controller->getCompleteStand() &&
       std::abs((chassis.x[THETA_L] + chassis.x[THETA_R]) / 2.) > .50 && std::abs(command.x) > .1 &&
       std::abs(chassis.x[V]) > .1 && (lp.L0 + rp.L0) / 2. > .30 && controller->getLegCmd() > .30)
@@ -180,6 +181,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
 
 void Normal::requestMode(int mode)
 {
+  // All Normal action exits occur before the ground KF/feedback branch.
   auto* bipedal_controller = static_cast<BipedalController*>(controller);
   bipedal_controller->integrateVelocity();
   if (mode == PROTECT || mode == SIT_DOWN)
@@ -317,4 +319,4 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
   return true;
 }
 
-}  // namespace rm_chassis_controllers
+} // namespace rm_chassis_controllers
