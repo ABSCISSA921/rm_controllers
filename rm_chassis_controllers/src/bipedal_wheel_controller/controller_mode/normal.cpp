@@ -28,6 +28,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
       pid->reset();
     feedback.active = false;
     feedback.reference_valid = false;
+    resetMpc();
     controller->setStateChange(true);
     ROS_INFO("[balance] Enter NORMAL with ten-state feedback");
   }
@@ -52,6 +53,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     jump_dwell_ = 0.;
     feedback.active = false;
     feedback.reference_valid = false;
+    resetMpc();
     ROS_INFO("[balance] Jump start: original axial stages with mechanical swing PID");
   }
   if (jump_phase_ != IDLE)
@@ -128,7 +130,11 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   const double circle = chassis.x[V] * chassis.x[YAW_RATE];
   const double alpha = std::abs(circle) > 10. ? 10. / std::abs(circle) : 1.;
   const double velocity_reference = complete_stand ? alpha * command.x : 0.;
-  computeFeedback(velocity_reference, alpha * command.z);
+  if (!computeFeedback(velocity_reference, alpha * command.z))
+  {
+    requestMode(PROTECT);
+    return;
+  }
   // Second-order length shaping is inactive; retain the former path for reference.
   // if (complete_stand)
   //   length_reference_.update(requested_length, chassis.dt, config.length_reference_tau);
@@ -181,6 +187,7 @@ void Normal::requestMode(int mode)
     bipedal_controller->chassis_state_.x[S] = 0.;
   auto &result = controller->getNormalFeedback();
   result.active = result.reference_valid = false;
+  resetMpc();
   controller->setMode(mode);
   controller->setStateChange(false);
   controller->setCompleteStand(false);
@@ -218,8 +225,6 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
       force = -action.off_ground_force * (1. - 3. * flipped * flipped + 2. * flipped * flipped * flipped);
     }
     commands[side].force = force - controller->f_spring_force(pos.L0);
-    // The ground K10 is not used during the jump action.
-    // This is the original action's mechanical PID port, replacing only the old K6 flight row.
     commands[side].torque = thetas_[side]->computeCommand(-pos.theta, period);
     leg.vmc->leg_conv(commands[side].force, commands[side].torque, commands[side].input);
   }
@@ -250,16 +255,27 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
   }
 }
 
-void Normal::computeFeedback(double velocity, double yaw_rate)
+void Normal::resetMpc()
 {
-  auto &feedback = controller->getNormalFeedback();
-  const auto &chassis = controller->getChassisState();
-  const auto &config = controller->getLqrConfig();
-  Gain10 gain;
-  Input4 feedforward;
-  State10 equilibrium;
-  evaluate(config, chassis.length, gain, feedforward, &equilibrium);
-  auto *bipedal_controller = static_cast<BipedalController *>(controller);
+  auto* bipedal_controller = static_cast<BipedalController*>(controller);
+  bipedal_controller->mpc_bank_.reset();
+}
+
+bool Normal::computeFeedback(double velocity, double yaw_rate)
+{
+  auto& feedback = controller->getNormalFeedback();
+  const auto& chassis = controller->getChassisState();
+  const auto& config = controller->getLqrConfig();
+  auto* bipedal_controller = static_cast<BipedalController*>(controller);
+  feedback.active = false;
+  if (!chassis.x.allFinite() || !chassis.length.allFinite() ||
+      (chassis.length.array() < config.model.geometry_domain[0]).any() ||
+      (chassis.length.array() > config.model.geometry_domain[1]).any() || !std::isfinite(chassis.dt) ||
+      chassis.dt <= 0. || !std::isfinite(velocity) || !std::isfinite(yaw_rate))
+    return false;
+  auto* entry = bipedal_controller->mpc_bank_.select(chassis.length);
+  if (!entry || !entry->backend.initialized())
+    return false;
   if (!feedback.reference_valid)
   {
     feedback.reference.setZero();
@@ -267,15 +283,33 @@ void Normal::computeFeedback(double velocity, double yaw_rate)
     feedback.reference[YAW] = chassis.x[YAW];
     feedback.reference_valid = true;
   }
-  // Absolute physical angles remain in the observation. Only the commanded static
-  // equilibrium is scheduled; S is cleared and yaw reference initialized on Normal entry.
-  for (int i : {THETA_L, THETA_R, BODY_PITCH})
-    feedback.reference[i] = equilibrium[i];
+  // Reference and backend coordinates use the same selected node's static equilibrium.
+  for (int i : { THETA_L, THETA_R, BODY_PITCH })
+    feedback.reference[i] = entry->equilibrium[i];
   feedback.reference[V] = velocity;
   feedback.reference[YAW_RATE] = yaw_rate;
   feedback.reference[YAW] += yaw_rate * chassis.dt;
-  feedback.output = feedforward - gain * (chassis.x - feedback.reference);
+  if (!feedback.reference.allFinite())
+    return false;
+  Input4 output;
+  const auto& params = bipedal_controller->mpc_params_;
+  auto& trajectory = bipedal_controller->mpc_reference_;
+  for (int i = 0; i < params.horizon; ++i)
+  {
+    trajectory.col(i) = feedback.reference;
+    trajectory(S, i) += velocity * params.sample_period * i;
+    trajectory(YAW, i) += yaw_rate * params.sample_period * i;
+  }
+  if (!entry->backend.solve(chassis.x, trajectory, output))
+  {
+    const auto& report = entry->backend.report();
+    ROS_WARN_THROTTLE(1., "[mpc] Solve failed at legs=(%g, %g): status=%d iterations=%d time=%g s", entry->lengths[0],
+                      entry->lengths[1], static_cast<int>(report.status), report.iterations, report.solve_time);
+    return false;
+  }
+  feedback.output = output;
   feedback.active = true;
+  return true;
 }
 
 } // namespace rm_chassis_controllers

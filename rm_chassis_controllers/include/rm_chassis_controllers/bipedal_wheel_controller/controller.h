@@ -24,6 +24,7 @@
 #include <rm_chassis_controllers/LQRWeightConfig.h>
 #include "bipedal_wheel_controller/dynamics/model10.h"
 #include "bipedal_wheel_controller/estimation/velocity_kf.h"
+#include "bipedal_wheel_controller/mpc/mpc_bank.h"
 #include "rm_chassis_controllers/chassis_base.h"
 
 #include "bipedal_wheel_controller/helper_functions.h"
@@ -99,13 +100,13 @@ private:
 
   bool setupParams(ros::NodeHandle &controller_nh);
   bool loadLqrParams(ros::NodeHandle &controller_nh, Config &config);
-  bool setupLQR(ros::NodeHandle &controller_nh);
-  GainUpdate polyfit(const State10 &q, const Input4 &r, DesignReport &report) const;
+  bool setupFeedbackParams(ros::NodeHandle& controller_nh);
+  bool setupMpc(ros::NodeHandle &controller_nh);
+  mpc_bank mpc_bank_;
+  mpc_backend::Params mpc_params_;
+  mpc_backend::StateTrajectory mpc_reference_;
   void reconfigCB(LQRWeightConfig &config, uint32_t level);
   void configureLqrInterface(ros::NodeHandle &controller_nh);
-  Config design_config_; // Immutable non-RT model/domain after init.
-  realtime_tools::RealtimeBuffer<GainUpdate> gain_update_buffer_;
-  bool first_reconfigure_{true};
   std::unique_ptr<dynamic_reconfigure::Server<LQRWeightConfig>> lqr_server_;
   bool setupModelParams(ros::NodeHandle &controller_nh);
   bool setupThresholdParams(ros::NodeHandle &controller_nh);

@@ -25,7 +25,8 @@ public:
   }
 
 private:
-  void computeFeedback(double velocity, double yaw_rate);
+  bool computeFeedback(double velocity, double yaw_rate);
+  void resetMpc();
   void requestMode(int mode);
   void executeJump(const ros::Time& time, const ros::Duration& period);
   std::vector<control_toolbox::Pid*> thetas_;

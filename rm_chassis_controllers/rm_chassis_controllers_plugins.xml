@@ -1,4 +1,5 @@
-<library path="lib/librm_chassis_controllers">
+<class_libraries>
+  <library path="lib/librm_chassis_controllers">
 
     <class name="rm_chassis_controllers/OmniController"
            type="rm_chassis_controllers::OmniController"
@@ -32,6 +33,8 @@
             EffortJointInterface type of hardware interface.
         </description>
     </class>
+  </library>
+  <library path="lib/librm_bipedal_controllers">
     <class name="rm_chassis_controllers/BipedalController"
            type="rm_chassis_controllers::BipedalController"
            base_class_type="controller_interface::ControllerBase">
@@ -47,4 +50,5 @@
             The two link vmc controller.
         </description>
     </class>
-</library>
+  </library>
+</class_libraries>
