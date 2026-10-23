@@ -84,6 +84,7 @@ set(BIPEDAL_SOURCES
         src/bipedal_wheel_controller/dynamics/model10.cpp
         src/bipedal_wheel_controller/dynamics/design10.cpp
         src/bipedal_wheel_controller/mpc/mpc_backend.cpp
+        src/bipedal_wheel_controller/mpc/mpc_bank.cpp
         src/bipedal_wheel_controller/controller.cpp
         src/bipedal_wheel_controller/controller_mode/mode_base.cpp
         src/bipedal_wheel_controller/controller_mode/mode_manager.cpp

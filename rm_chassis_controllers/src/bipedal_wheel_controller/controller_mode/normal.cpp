@@ -1,6 +1,5 @@
 #include "bipedal_wheel_controller/controller_mode/normal.h"
 #include "bipedal_wheel_controller/controller.h"
-#include <exception>
 namespace rm_chassis_controllers
 {
 Normal::Normal(BipedalControllerInterface *c, const std::vector<hardware_interface::JointHandle *> &joints,
@@ -259,8 +258,7 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
 void Normal::resetMpc()
 {
   auto* bipedal_controller = static_cast<BipedalController*>(controller);
-  if (bipedal_controller->mpc_)
-    bipedal_controller->mpc_->reset();
+  bipedal_controller->mpc_bank_.reset();
 }
 
 bool Normal::computeFeedback(double velocity, double yaw_rate)
@@ -269,22 +267,15 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
   const auto& chassis = controller->getChassisState();
   const auto& config = controller->getLqrConfig();
   auto* bipedal_controller = static_cast<BipedalController*>(controller);
-  auto* mpc = bipedal_controller->mpc_.get();
   feedback.active = false;
-  if (!mpc || !mpc->initialized() || !chassis.x.allFinite() || !chassis.length.allFinite() ||
+  if (!chassis.x.allFinite() || !chassis.length.allFinite() ||
       (chassis.length.array() < config.model.geometry_domain[0]).any() ||
       (chassis.length.array() > config.model.geometry_domain[1]).any() || !std::isfinite(chassis.dt) ||
       chassis.dt <= 0. || !std::isfinite(velocity) || !std::isfinite(yaw_rate))
     return false;
-  State10 equilibrium;
-  try
-  {
-    equilibrium = staticEquilibrium(config.model, chassis.length, config.uff);
-  }
-  catch (const std::exception&)
-  {
+  auto* entry = bipedal_controller->mpc_bank_.select(chassis.length);
+  if (!entry || !entry->backend.initialized())
     return false;
-  }
   if (!feedback.reference_valid)
   {
     feedback.reference.setZero();
@@ -292,10 +283,9 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
     feedback.reference[YAW] = chassis.x[YAW];
     feedback.reference_valid = true;
   }
-  // Absolute physical angles remain in the observation. Only the commanded static
-  // equilibrium is scheduled; S is cleared and yaw reference initialized on Normal entry.
+  // Reference and backend coordinates use the same selected node's static equilibrium.
   for (int i : { THETA_L, THETA_R, BODY_PITCH })
-    feedback.reference[i] = equilibrium[i];
+    feedback.reference[i] = entry->equilibrium[i];
   feedback.reference[V] = velocity;
   feedback.reference[YAW_RATE] = yaw_rate;
   feedback.reference[YAW] += yaw_rate * chassis.dt;
@@ -310,8 +300,13 @@ bool Normal::computeFeedback(double velocity, double yaw_rate)
     trajectory(S, i) += velocity * params.sample_period * i;
     trajectory(YAW, i) += yaw_rate * params.sample_period * i;
   }
-  if (!mpc->solve(chassis.x, trajectory, output))
+  if (!entry->backend.solve(chassis.x, trajectory, output))
+  {
+    const auto& report = entry->backend.report();
+    ROS_WARN_THROTTLE(1., "[mpc] Solve failed at legs=(%g, %g): status=%d iterations=%d time=%g s", entry->lengths[0],
+                      entry->lengths[1], static_cast<int>(report.status), report.iterations, report.solve_time);
     return false;
+  }
   feedback.output = output;
   feedback.active = true;
   return true;
