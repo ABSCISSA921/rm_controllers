@@ -50,12 +50,17 @@ struct mpc_backend::Impl
   State10 equilibrium{ State10::Zero() };
   Input4 feedforward{ Input4::Zero() };
   Report report;
+  double yaw_origin{ 0. };
+  bool yaw_origin_valid{ false };
 
   void clearWorkspace()
   {
+    yaw_origin = 0.;
+    yaw_origin_valid = false;
     if (!solver)
       return;
     auto& work = *solver->work;
+    work.x.setZero();
     work.v.setZero();
     work.vnew.setZero();
     work.z.setZero();
@@ -66,6 +71,27 @@ struct mpc_backend::Impl
     solver->solution->u.setZero();
     solver->solution->iter = 0;
     solver->solution->solved = 0;
+  }
+
+  bool setYawOrigin(double origin)
+  {
+    if (yaw_origin_valid)
+    {
+      const double shift = origin - yaw_origin;
+      if (!std::isfinite(shift))
+        return false;
+      auto& work = *solver->work;
+      work.x.row(YAW).array() -= shift;
+      work.v.row(YAW).array() -= shift;
+      work.vnew.row(YAW).array() -= shift;
+      solver->solution->x.row(YAW).array() -= shift;
+      if (!work.x.row(YAW).allFinite() || !work.v.row(YAW).allFinite() || !work.vnew.row(YAW).allFinite() ||
+          !solver->solution->x.row(YAW).allFinite())
+        return false;
+    }
+    yaw_origin = origin;
+    yaw_origin_valid = true;
+    return true;
   }
 
   bool updateBounds(const Input4& lower, const Input4& upper)
@@ -103,7 +129,8 @@ bool mpc_backend::initialize(const LinearModel& model, const Params& params)
       !std::isfinite(params.abs_pri_tol) || params.abs_pri_tol <= 0. || !std::isfinite(params.abs_dua_tol) ||
       params.abs_dua_tol <= 0. || !std::isfinite(params.max_solve_time) || params.max_solve_time < 0. ||
       !model.A.allFinite() || !model.B.allFinite() || !model.equilibrium.allFinite() || !model.uff.allFinite() ||
-      !model.residual.allFinite() || !validBounds(params.input_min, params.input_max))
+      !model.residual.allFinite() || !model.A.col(YAW).isZero(0.) ||
+      !validBounds(params.input_min, params.input_max))
     return false;
 
   impl_->report.status = Status::SOLVER_FAILED;
@@ -200,9 +227,12 @@ bool mpc_backend::solve(const State10& state, const StateTrajectory& reference, 
   try
   {
     auto& solver = *impl_->solver;
-    const tinyVector initial_state = state - impl_->equilibrium;
-    const tinyMatrix state_reference = reference.colwise() - impl_->equilibrium;
-    if (!initial_state.allFinite() || !state_reference.allFinite())
+    const double yaw_origin = reference(YAW, 0);
+    tinyVector initial_state = state - impl_->equilibrium;
+    tinyMatrix state_reference = reference.colwise() - impl_->equilibrium;
+    initial_state[YAW] = state[YAW] - yaw_origin;
+    state_reference.row(YAW).array() = reference.row(YAW).array() - yaw_origin;
+    if (!initial_state.allFinite() || !state_reference.allFinite() || !impl_->setYawOrigin(yaw_origin))
     {
       impl_->clearWorkspace();
       impl_->report.status = Status::INVALID_INPUT;
