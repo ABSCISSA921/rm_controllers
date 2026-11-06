@@ -59,7 +59,7 @@ catkin_package(
         nav_msgs
         angles
         dynamic_reconfigure
-        LIBRARIES ${PROJECT_NAME}
+        LIBRARIES ${PROJECT_NAME} rm_bipedal_ground_core
 )
 
 ###########
@@ -79,6 +79,17 @@ file(GLOB_RECURSE BIPEDAL_SOURCES
         "src/bipedal_wheel_controller/*.cpp"
         "src/bipedal_wheel_controller/*.c"
 )
+file(GLOB_RECURSE GROUND_CORE_SOURCES
+  "src/bipedal_wheel_controller/vmc/*.cpp"
+  "src/bipedal_wheel_controller/vmc/*.c"
+  "src/bipedal_wheel_controller/dynamics/*.cpp"
+  "src/bipedal_wheel_controller/estimation/*.cpp"
+  "src/bipedal_wheel_controller/core/*.cpp")
+list(APPEND GROUND_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/bipedal_wheel_controller/base_task.cpp")
+list(REMOVE_ITEM BIPEDAL_SOURCES ${GROUND_CORE_SOURCES})
+add_library(rm_bipedal_ground_core ${GROUND_CORE_SOURCES})
+target_link_libraries(rm_bipedal_ground_core ${catkin_LIBRARIES})
+add_dependencies(rm_bipedal_ground_core ${catkin_EXPORTED_TARGETS})
 
 
 ## Declare cpp executables
@@ -93,6 +104,7 @@ add_library(${PROJECT_NAME}
 
 ## Specify libraries to link executable targets against
 target_link_libraries(${PROJECT_NAME}
+        rm_bipedal_ground_core
         ${catkin_LIBRARIES}
         # ${Boost_LIBRARIES}
         # Threads::Threads
@@ -106,7 +118,7 @@ add_dependencies(${PROJECT_NAME} ${PROJECT_NAME}_gencfg ${catkin_EXPORTED_TARGET
 
 # Mark executables and/or libraries for installation
 install(
-        TARGETS ${PROJECT_NAME}
+        TARGETS ${PROJECT_NAME} rm_bipedal_ground_core
         ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
         LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

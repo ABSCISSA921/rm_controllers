@@ -1,0 +1,13 @@
+{
+  "description": "Original Manual startup, down -> RC mid -> PC up, then short-leg hold. Times are elapsed simulation seconds after GUI readiness; physical standing must be scored from physics.csv.",
+  "duration": 18.0,
+  "events": [
+    {"at": 0.0, "op": "switch", "side": "right", "value": 99},
+    {"at": 0.0, "op": "switch", "side": "left", "value": 99},
+    {"at": 0.0, "op": "keyboard_on"},
+    {"at": 0.0, "op": "publish_toggle"},
+    {"at": 1.0, "op": "switch", "side": "right", "value": 50},
+    {"at": 1.5, "op": "switch", "side": "right", "value": 0},
+    {"at": 16.0, "op": "switch", "side": "right", "value": 99}
+  ]
+}

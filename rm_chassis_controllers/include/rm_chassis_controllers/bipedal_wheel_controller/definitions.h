@@ -53,6 +53,7 @@ struct GainUpdate
 };
 struct Config
 {
+  Eigen::Vector3d hip_midpoint_base{Eigen::Vector3d::Zero()};
   Eigen::Matrix<double, 10, 40> coeffs{Eigen::Matrix<double, 10, 40>::Zero()};
   Eigen::Matrix<double, 2, 2> domain{Eigen::Matrix<double, 2, 2>::Zero()};
   Input4 uff{Input4::Zero()};
@@ -71,6 +72,9 @@ struct NormalFeedback
   Input4 output{Input4::Zero()}; // U4 consumed by VMC/wheels and the compatibility status.
   Eigen::Vector2d axial_force{Eigen::Vector2d::Zero()}; // F consumed by VMC and the same status.
   bool active{false}; // Selects Normal U4/F for status publication; does not authorize control.
+  Eigen::Vector2d base_position_reference{Eigen::Vector2d::Zero()};
+  Eigen::Vector3d base_velocity_reference{Eigen::Vector3d::Zero()};
+  double base_height_reference{0.}, base_height_rate_reference{0.};
 };
 
 struct ControlParams
@@ -177,6 +181,9 @@ struct ChassisState
 {
   // Current whole-body observation, shared by Normal and the original mode interface.
   State10 x{State10::Zero()};
+  Eigen::Vector2d base_position_world{Eigen::Vector2d::Zero()};
+  Eigen::Vector3d base_velocity_world{Eigen::Vector3d::Zero()};
+  double base_height{0.}, base_height_rate{0.};
   Eigen::Vector2d length{Eigen::Vector2d::Zero()}, dlength{Eigen::Vector2d::Zero()};
   double dt{0.}; // Host-supplied computation step for integration and the velocity estimator.
 

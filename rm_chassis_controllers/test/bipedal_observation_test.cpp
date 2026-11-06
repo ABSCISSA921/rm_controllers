@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include "bipedal_wheel_controller/controller.h"
+#include "bipedal_wheel_controller/core/ground_core.h"
 
 namespace rm_chassis_controllers
 {
@@ -50,6 +51,8 @@ protected:
     }
     auto &config = controller_.lqr_config_;
     config.wheel_radius = .08;
+    controller_.wheel_radius_ = config.wheel_radius;
+    config.length_reference_tau = .2;
     config.domain << .06, .40, .06, .40;
     // Simple valid trim and constant gains, only for exercising the real Normal path.
     config.model.geometry_domain << .06, .40;
@@ -88,16 +91,24 @@ protected:
   {
     observation_time_ = time;
     state().dt = dt;
-    for (int side = 0; side < 2; ++side)
-      state().length[side] = controller_.leg_state_[side].vmc->getPos().L0;
-    const double pitch_rate = state().angular_vel.y * std::cos(state().roll) -
-                              state().angular_vel.z * std::sin(state().roll);
-    controller_.observe(pitch_rate, Eigen::Vector2d::Zero());
+    controller_.rotation_world_base_ =
+        (Eigen::AngleAxisd(state().yaw, Eigen::Vector3d::UnitZ()) *
+         Eigen::AngleAxisd(state().pitch, Eigen::Vector3d::UnitY()) *
+         Eigen::AngleAxisd(state().roll, Eigen::Vector3d::UnitX())).toRotationMatrix();
+    Joint6 position, velocity;
+    for (int i = 0; i < 6; ++i)
+    {
+      position[i] = positions_[i];
+      velocity[i] = velocities_[i];
+    }
+    ground_core::updateVirtualLegs(controller_.leg_state_, position, velocity);
+    controller_.updateChassisState();
   }
   void baseMode(int mode) { controller_.state_ = mode; }
   void velocityCommand(double velocity) { controller_.vel_cmd_.x = velocity; }
   void integrate() { controller_.integrateVelocity(); }
   void ground() { controller_.updateGroundVelocity(); }
+  geometry_msgs::Twist odometry() { return controller_.odometry(); }
   void stageGain(const Eigen::Matrix<double, 10, 40> &coeffs, const State10 &q, const Input4 &r)
   {
     GainUpdate update;
@@ -308,31 +319,38 @@ TEST_F(BipedalObservationTest, JitterKeepsNormalReferencePidAndIntegration)
   }
 }
 
-TEST_F(BipedalObservationTest, NormalAccumulatesSlowDriftWithZeroPositionReference)
+TEST_F(BipedalObservationTest, NormalRetainsObservationAndTracksWorldBaseReference)
 {
   velocities_[4] = velocities_[5] = 2.;
   state().x[S] = 1.;
+  state().base_position_world << 2., -3.;
   observe(10.);
   execute();
   ASSERT_TRUE(feedback().active);
-  EXPECT_DOUBLE_EQ(state().x[S], 0.); // First Normal feedback clears the integral.
+  EXPECT_NEAR(state().x[S], 1.00016, 1e-12);
+  EXPECT_TRUE(feedback().base_position_reference.isApprox(state().base_position_world, 1e-12));
+  const Eigen::Vector2d captured = feedback().base_position_reference;
   observe(10.001023);
   execute();
-  EXPECT_NEAR(state().x[S], .00016, 1e-12);
-  EXPECT_DOUBLE_EQ(feedback().reference[S], 0.);
+  EXPECT_NEAR(state().x[S], 1.00032, 1e-12);
+  EXPECT_TRUE(feedback().base_position_reference.isApprox(captured, 1e-12));
+  EXPECT_NEAR(state().base_position_world.x(), 2.00032, 1e-12);
   velocityCommand(.2);
   observe(10.002);
   execute();
-  EXPECT_DOUBLE_EQ(state().x[S], 0.);
-  EXPECT_DOUBLE_EQ(feedback().reference[S], 0.);
+  EXPECT_NEAR(state().x[S], 1.00048, 1e-12);
+  EXPECT_NEAR(feedback().base_position_reference.x(), captured.x() + .0002, 1e-12);
+  EXPECT_DOUBLE_EQ(feedback().base_position_reference.y(), captured.y());
+  EXPECT_NEAR(feedback().base_velocity_reference.x(), .2, 1e-12);
   velocityCommand(0.);
   observe(10.003);
   execute();
-  EXPECT_NEAR(state().x[S], .00016, 1e-12);
-  EXPECT_DOUBLE_EQ(feedback().reference[S], 0.);
+  EXPECT_NEAR(state().x[S], 1.00064, 1e-12);
+  EXPECT_NEAR(feedback().base_position_reference.x(), captured.x() + .0002, 1e-12);
+  EXPECT_DOUBLE_EQ(feedback().base_velocity_reference.norm(), 0.);
 }
 
-TEST_F(BipedalObservationTest, PositionIntegralUsesOriginalSpeedCommandAndRawConditions)
+TEST_F(BipedalObservationTest, PositionIntegralContinuesDuringMotionAndRaw)
 {
   struct Sample
   {
@@ -342,22 +360,29 @@ TEST_F(BipedalObservationTest, PositionIntegralUsesOriginalSpeedCommandAndRawCon
   const Sample samples[] = {
       {rm_msgs::ChassisCmd::FOLLOW, .5, .01, 1.0005},
       {rm_msgs::ChassisCmd::FOLLOW, -.5, -.01, .9995},
-      {rm_msgs::ChassisCmd::FOLLOW, .5001, 0., 0.},
-      {rm_msgs::ChassisCmd::FOLLOW, -.5001, 0., 0.},
-      {rm_msgs::ChassisCmd::FOLLOW, .2, .0101, 0.},
-      {rm_msgs::ChassisCmd::FOLLOW, -.2, -.0101, 0.},
-      {rm_msgs::ChassisCmd::RAW, .2, 0., 0.}};
+      {rm_msgs::ChassisCmd::FOLLOW, .5001, 0., 1.0005001},
+      {rm_msgs::ChassisCmd::FOLLOW, -.5001, 0., .9994999},
+      {rm_msgs::ChassisCmd::FOLLOW, .2, .0101, 1.0002},
+      {rm_msgs::ChassisCmd::FOLLOW, -.2, -.0101, .9998},
+      {rm_msgs::ChassisCmd::RAW, .2, 0., 1.0002}};
   for (const auto& sample : samples)
   {
     baseMode(sample.mode);
     velocityCommand(sample.command);
     state().x[S] = 1.;
     state().x[V] = sample.speed;
+    // Integration consumes the already observed base-point velocity independently
+    // of the wheel-midpoint coordinate and does not overwrite its projection.
+    state().base_position_world << 2., -3.;
+    state().base_velocity_world << sample.speed + .1, .3, 0.;
+    state().x_vel = sample.speed + .1;
     state().dt = .001;
     integrate();
     EXPECT_NEAR(state().x[S], sample.position, 1e-12);
     EXPECT_DOUBLE_EQ(state().x[V], sample.speed);
-    EXPECT_DOUBLE_EQ(state().x_vel, sample.speed);
+    EXPECT_DOUBLE_EQ(state().x_vel, sample.speed + .1);
+    EXPECT_NEAR(state().base_position_world.x(), 2. + (sample.speed + .1) * .001, 1e-12);
+    EXPECT_NEAR(state().base_position_world.y(), -2.9997, 1e-12);
   }
 }
 
@@ -376,6 +401,33 @@ TEST_F(BipedalObservationTest, SuppliedStepControlsIntegralNotRosLabels)
     expected += .16 * dt;
     EXPECT_NEAR(state().x[S], expected, 1e-12);
   }
+}
+
+TEST_F(BipedalObservationTest, OdometryReportsBasePointVelocityInBaseAxes)
+{
+  missingTfCycle(); // Select the real Normal mode for the odometry publication path.
+  state().yaw = M_PI / 2.;
+  for (int i = 0; i < 4; ++i)
+    velocities_[i] = .2;
+  observe(10.001);
+  double expected_forward = state().x[V], expected_vertical = 0.;
+  for (int side = 0; side < 2; ++side)
+  {
+    const double angle = state().x[THETA_L + 2 * side];
+    const double rate = state().x[DTHETA_L + 2 * side];
+    expected_forward += .5 * (state().dlength[side] * std::sin(angle) +
+                               state().length[side] * std::cos(angle) * rate);
+    expected_vertical += .5 * (state().dlength[side] * std::cos(angle) -
+                                state().length[side] * std::sin(angle) * rate);
+  }
+  ASSERT_GT(std::abs(expected_forward - state().x[V]), .001);
+  EXPECT_NEAR(state().base_velocity_world.x(), 0., 1e-12);
+  EXPECT_NEAR(state().base_velocity_world.y(), expected_forward, 1e-12);
+  const auto twist = odometry();
+  EXPECT_NEAR(twist.linear.x, expected_forward, 1e-12);
+  EXPECT_NEAR(twist.linear.y, 0., 1e-12);
+  EXPECT_NEAR(twist.linear.z, expected_vertical, 1e-12);
+  EXPECT_DOUBLE_EQ(twist.angular.z, state().angular_vel.z);
 }
 
 TEST_F(BipedalObservationTest, JitterDoesNotReseedVelocityFilter)
@@ -504,11 +556,11 @@ TEST_F(BipedalObservationTest, MissingImuTransformContinuesNormalAndOverwritesTe
   EXPECT_TRUE(feedback().active);
   EXPECT_EQ(controller_.getBalanceMode(), NORMAL);
   EXPECT_NE(commands_[0], 0.);
-  EXPECT_NEAR(commands_[4], -.16, 1e-12);
-  EXPECT_DOUBLE_EQ(state().x[S], 0.);
+  EXPECT_NEAR(commands_[4], feedback().reference[V] - .16, 1e-12);
+  EXPECT_NEAR(state().x[S], .00016, 1e-12);
   missingTfCycle();
   EXPECT_TRUE(feedback().active);
-  EXPECT_NEAR(state().x[S], .00016, 1e-12);
+  EXPECT_NEAR(state().x[S], .00032, 1e-12);
 }
 
 TEST_F(BipedalObservationTest, NonfiniteVelocityPropagatesWithoutFilterResetOrOutputZeroing)
@@ -521,7 +573,7 @@ TEST_F(BipedalObservationTest, NonfiniteVelocityPropagatesWithoutFilterResetOrOu
   execute();
   EXPECT_TRUE(feedback().active);
   EXPECT_TRUE(std::isnan(state().x[V]));
-  EXPECT_DOUBLE_EQ(state().x[S], 0.); // The low-speed integration condition is false.
+  EXPECT_TRUE(std::isnan(state().x[S])); // Continuous integration preserves the propagated nonfinite state.
   EXPECT_TRUE(std::isnan(commands_[4]));
   velocities_[4] = 0.;
   observe(10.002);
@@ -742,8 +794,9 @@ TEST_F(BipedalObservationTest, ProtectToNormalResetsLegIntegralWithoutRollKick)
   double p, i, d;
   leg_l_.getCurrentPIDErrors(&p, &i, &d);
   EXPECT_NEAR(i, p * .001, 1e-12); // Only this Normal cycle's integral remains.
-  EXPECT_DOUBLE_EQ(d, 0.); // Measured length derivative still in use.
-  EXPECT_NEAR(feedback().axial_force[0] - feedback().axial_force[1], 2. * roll_.getCurrentCmd(), 1e-9);
+  EXPECT_NEAR(d, feedback().base_height_rate_reference - state().base_height_rate, 1e-12);
+  EXPECT_NEAR(feedback().axial_force[0] - feedback().axial_force[1],
+              2. * roll_.getCurrentCmd() / std::cos(state().roll), 1e-9);
   controller_.stopping(ros::Time(10.003));
   EXPECT_FALSE(feedback().active);
   for (double command : commands_)
@@ -754,7 +807,7 @@ TEST_F(BipedalObservationTest, StartupDoesNotRequireNewCommandTimestamps)
 {
   velocities_[4] = velocities_[5] = 2.;
   cycleWithPreStartCommand();
-  EXPECT_DOUBLE_EQ(state().x[S], 0.);
+  EXPECT_NEAR(state().x[S], .00016, 1e-12);
   EXPECT_EQ(controller_.getBaseState(), rm_msgs::ChassisCmd::RAW);
   EXPECT_EQ(controller_.getBalanceMode(), STAND_UP);
 }
@@ -766,12 +819,14 @@ TEST_F(BipedalObservationTest, StopStartPreservesObservationPositionAndHeading)
   execute();
   feedback().reference[YAW] = .7;
   state().x[S] = 1.;
+  state().base_position_world << 2., -3.;
   state().x[YAW] = 2 * M_PI + .3;
   state().yaw = .3;
   controller_.stopping(ros::Time(10.001));
   restart();
   EXPECT_FALSE(feedback().reference_valid);
   EXPECT_DOUBLE_EQ(state().x[S], 1.);
+  EXPECT_TRUE(state().base_position_world.isApprox(Eigen::Vector2d(2., -3.), 1e-12));
   EXPECT_DOUBLE_EQ(state().x[YAW], 2 * M_PI + .3);
   EXPECT_EQ(controller_.getBalanceMode(), SIT_DOWN);
   EXPECT_FALSE(controller_.getCompleteStand());
@@ -782,8 +837,8 @@ TEST_F(BipedalObservationTest, StopStartPreservesObservationPositionAndHeading)
   observe(20.001);
   execute();
   EXPECT_TRUE(feedback().reference_valid);
-  EXPECT_DOUBLE_EQ(state().x[S], 0.);
-  EXPECT_DOUBLE_EQ(feedback().reference[S], 0.);
+  EXPECT_DOUBLE_EQ(state().x[S], 1.);
+  EXPECT_TRUE(feedback().base_position_reference.isApprox(Eigen::Vector2d(2., -3.), 1e-12));
   EXPECT_DOUBLE_EQ(feedback().reference[YAW], state().x[YAW]);
   EXPECT_NEAR(state().x[YAW], 2 * M_PI + .3, 1e-12);
   EXPECT_NEAR(roll_.getCurrentCmd(), -102.578272755, 1e-9);

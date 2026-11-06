@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.13)
+project(base_link_gazebo_observer LANGUAGES CXX)
+find_package(gazebo REQUIRED)
+add_library(base_link_gazebo_observer SHARED truth_sampler.cpp)
+target_compile_features(base_link_gazebo_observer PRIVATE cxx_std_17)
+target_include_directories(base_link_gazebo_observer PRIVATE ${GAZEBO_INCLUDE_DIRS})
+target_link_directories(base_link_gazebo_observer PRIVATE ${GAZEBO_LIBRARY_DIRS})
+target_link_libraries(base_link_gazebo_observer PRIVATE ${GAZEBO_LIBRARIES})

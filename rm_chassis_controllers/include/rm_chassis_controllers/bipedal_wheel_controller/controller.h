@@ -42,77 +42,159 @@ class BipedalController : public ChassisBase<rm_control::RobotStateInterface, ha
 {
 public:
   BipedalController() = default;
-  const Config &getLqrConfig() const override { return lqr_config_; }
-  NormalFeedback &getNormalFeedback() override { return normal_feedback_; }
-  const ControlParams &getActionParams() const override { return action_params_; }
-  int getBalanceMode() const override { return balance_mode_; }
-  bool init(hardware_interface::RobotHW *robot_hw, ros::NodeHandle &root_nh, ros::NodeHandle &controller_nh) override;
-  void moveJoint(const ros::Time &time, const ros::Duration &period) override;
-  void starting(const ros::Time &time) override;
-  void stopping(const ros::Time &time) override;
+  const Config& getLqrConfig() const override
+  {
+    return lqr_config_;
+  }
+  NormalFeedback& getNormalFeedback() override
+  {
+    return normal_feedback_;
+  }
+  const ControlParams& getActionParams() const override
+  {
+    return action_params_;
+  }
+  int getBalanceMode() const override
+  {
+    return balance_mode_;
+  }
+  bool init(hardware_interface::RobotHW* robot_hw, ros::NodeHandle& root_nh, ros::NodeHandle& controller_nh) override;
+  void moveJoint(const ros::Time& time, const ros::Duration& period) override;
+  void starting(const ros::Time& time) override;
+  void stopping(const ros::Time& time) override;
   // BipedalControllerInterface implementations
-  bool getOverturn() const override { return overturn_; }
-  bool getStateChange() const override { return balance_state_changed_; }
-  bool getCompleteStand() const override { return complete_stand_; }
-  const std::shared_ptr<ModelParams>& getModelParams() const override { return model_params_; }
-  const std::shared_ptr<LegStateThresholdParams>& getLegThresholdParams() const override { return leg_threshold_params_; }
-  const std::shared_ptr<ChassisGeometryParams>& getChassisGeometryParams() const override { return chassis_geometry_params_; }
-  double getLegCmd() const override { return legCmd_; }
-  double getJumpCmd() const override { return jumpCmd_; }
-  int getBaseState() const override { return state_; }
-  inline double getDefaultLegLength() const override { return default_leg_length_;}
-  geometry_msgs::Vector3 getVelCmd() override { return vel_cmd_; }
-  inline const ChassisState& getChassisState() override { return chassis_state_; };
-  inline LegState& getLegState(Side side) override { return leg_state_[side]; };
-  inline bool getDown5cmStairFlag() const override { return down_5cm_stair_flag_.load(std::memory_order_acquire); }
-  inline void setDown5cmStairFlag(bool flag) override { down_5cm_stair_flag_.store(flag, std::memory_order_release); }
-  inline void setStateChange(bool state) override { balance_state_changed_ = state; }
-  inline void setCompleteStand(bool state) override { complete_stand_ = state; }
-  void setJumpCmd(bool cmd) override { jumpCmd_ = cmd; }
-  void setMode(int mode) override { balance_mode_ = mode; }
-  inline void clearRecoveryFlag() override { overturn_ = false; }
+  bool getOverturn() const override
+  {
+    return overturn_;
+  }
+  bool getStateChange() const override
+  {
+    return balance_state_changed_;
+  }
+  bool getCompleteStand() const override
+  {
+    return complete_stand_;
+  }
+  const std::shared_ptr<ModelParams>& getModelParams() const override
+  {
+    return model_params_;
+  }
+  const std::shared_ptr<LegStateThresholdParams>& getLegThresholdParams() const override
+  {
+    return leg_threshold_params_;
+  }
+  const std::shared_ptr<ChassisGeometryParams>& getChassisGeometryParams() const override
+  {
+    return chassis_geometry_params_;
+  }
+  double getLegCmd() const override
+  {
+    return legCmd_;
+  }
+  double getJumpCmd() const override
+  {
+    return jumpCmd_;
+  }
+  int getBaseState() const override
+  {
+    return state_;
+  }
+  inline double getDefaultLegLength() const override
+  {
+    return default_leg_length_;
+  }
+  geometry_msgs::Vector3 getVelCmd() override
+  {
+    return vel_cmd_;
+  }
+  inline const ChassisState& getChassisState() override
+  {
+    return chassis_state_;
+  };
+  inline LegState& getLegState(Side side) override
+  {
+    return leg_state_[side];
+  };
+  inline bool getDown5cmStairFlag() const override
+  {
+    return down_5cm_stair_flag_.load(std::memory_order_acquire);
+  }
+  inline void setDown5cmStairFlag(bool flag) override
+  {
+    down_5cm_stair_flag_.store(flag, std::memory_order_release);
+  }
+  inline void setStateChange(bool state) override
+  {
+    balance_state_changed_ = state;
+  }
+  inline void setCompleteStand(bool state) override
+  {
+    complete_stand_ = state;
+  }
+  void setJumpCmd(bool cmd) override
+  {
+    jumpCmd_ = cmd;
+  }
+  void setMode(int mode) override
+  {
+    balance_mode_ = mode;
+  }
+  inline void clearRecoveryFlag() override
+  {
+    overturn_ = false;
+  }
   double f_spring_force(double L0) override;
   void pubState() override;
   void pubLegLenStatus(const bool& upstair_flag) override;
-  void setRecoveryLegSpdTurnback(bool recovery_leg_spd_turnback) override { recovery_leg_spd_turnback_ = recovery_leg_spd_turnback; }
-  bool getRecoveryLegSpdTurnback() const override { return recovery_leg_spd_turnback_.load(std::memory_order_acquire);}
+  void setRecoveryLegSpdTurnback(bool recovery_leg_spd_turnback) override
+  {
+    recovery_leg_spd_turnback_ = recovery_leg_spd_turnback;
+  }
+  bool getRecoveryLegSpdTurnback() const override
+  {
+    return recovery_leg_spd_turnback_.load(std::memory_order_acquire);
+  }
+
 protected:
-  void readVirtualLeg(int side, double pitch_rate, double &carrier_rate);
-  void observe(double pitch_rate, const Eigen::Vector2d &carrier_rates);
+  void readVirtualLeg(int side, double pitch_rate, double& carrier_rate);
+  void observe(double pitch_rate, const Eigen::Vector2d& carrier_rates);
   Config lqr_config_;
   NormalFeedback normal_feedback_;
 
 private:
   friend class Normal;
-  friend class BipedalObservationTest; // Offline regression of the real observation/mode functions.
-  void updateEstimation(const ros::Time &time, const ros::Duration &period);
+  friend class BipedalObservationTest;  // Offline regression of the real observation/mode functions.
+  void updateEstimation(const ros::Time& time, const ros::Duration& period);
   void updateChassisState();
   void publishMode();
-  void publishCompatibilityStatus(const ros::Time &time);
+  void publishCompatibilityStatus(const ros::Time& time);
   ControlParams action_params_;
   VelocityKalmanFilter velocity_kf_;
-  Eigen::Matrix3d rotation_world_base_{Eigen::Matrix3d::Identity()};
-  Eigen::Vector3d imu_position_base_{Eigen::Vector3d::Zero()}, hip_midpoint_base_{Eigen::Vector3d::Zero()};
-  void setupVelocityEstimator(ros::NodeHandle &controller_nh);
+  Eigen::Matrix3d rotation_world_base_{ Eigen::Matrix3d::Identity() };
+  Eigen::Vector3d imu_position_base_{ Eigen::Vector3d::Zero() }, hip_midpoint_base_{ Eigen::Vector3d::Zero() };
+  void setupVelocityEstimator(ros::NodeHandle& controller_nh);
   void updateGroundVelocity();
   void integrateVelocity();
 
-  bool setupParams(ros::NodeHandle &controller_nh);
-  bool loadLqrParams(ros::NodeHandle &controller_nh, Config &config);
-  bool setupLQR(ros::NodeHandle &controller_nh);
-  GainUpdate polyfit(const State10 &q, const Input4 &r, DesignReport &report) const;
-  void reconfigCB(LQRWeightConfig &config, uint32_t level);
-  void configureLqrInterface(ros::NodeHandle &controller_nh);
-  Config design_config_; // Immutable non-RT model/domain after init.
+  bool setupParams(ros::NodeHandle& controller_nh);
+  bool loadLqrParams(ros::NodeHandle& controller_nh, Config& config);
+  bool setupLQR(ros::NodeHandle& controller_nh);
+  GainUpdate polyfit(const State10& q, const Input4& r, DesignReport& report) const;
+  void reconfigCB(LQRWeightConfig& config, uint32_t level);
+  void configureLqrInterface(ros::NodeHandle& controller_nh);
+  Config design_config_;  // Immutable non-RT model/domain after init.
   realtime_tools::RealtimeBuffer<GainUpdate> gain_update_buffer_;
-  bool first_reconfigure_{true};
+  bool first_reconfigure_{ true };
   std::unique_ptr<dynamic_reconfigure::Server<LQRWeightConfig>> lqr_server_;
-  bool setupModelParams(ros::NodeHandle &controller_nh);
-  bool setupThresholdParams(ros::NodeHandle &controller_nh);
-  bool setupSpringParams(ros::NodeHandle &controller_nh);
-  bool setupChassisGeometryParams(ros::NodeHandle &controller_nh);
-  void triggerDown5cmStairAction() { down_5cm_stair_flag_.store(true, std::memory_order_release); }
-  bool down5cmStairSrvCallback(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &res);
+  bool setupModelParams(ros::NodeHandle& controller_nh);
+  bool setupThresholdParams(ros::NodeHandle& controller_nh);
+  bool setupSpringParams(ros::NodeHandle& controller_nh);
+  bool setupChassisGeometryParams(ros::NodeHandle& controller_nh);
+  void triggerDown5cmStairAction()
+  {
+    down_5cm_stair_flag_.store(true, std::memory_order_release);
+  }
+  bool down5cmStairSrvCallback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res);
   geometry_msgs::Twist odometry() override;
 
   std::shared_ptr<ModelParams> model_params_;
@@ -126,31 +208,31 @@ private:
 
   ChassisState chassis_state_;
   LegState leg_state_[2];
-  double default_leg_length_{0.12};
-  std::atomic_bool down_5cm_stair_flag_{false};
+  double default_leg_length_{ 0.12 };
+  std::atomic_bool down_5cm_stair_flag_{ false };
   // stand up
   bool complete_stand_ = false, overturn_ = false;
   // recovery
-  std::atomic<bool> recovery_leg_spd_turnback_{false};
+  std::atomic<bool> recovery_leg_spd_turnback_{ false };
 
   // handles
   hardware_interface::ImuSensorHandle imu_handle_, gimbal_imu_handle_;
   hardware_interface::JointHandle left_wheel_joint_handle_, right_wheel_joint_handle_;
   hardware_interface::JointHandle left_hip_joint_handle_, left_knee_joint_handle_, right_hip_joint_handle_,
       right_knee_joint_handle_;
-  std::vector<hardware_interface::JointHandle *> joint_handles_;
+  std::vector<hardware_interface::JointHandle*> joint_handles_;
 
   // Leg Cmd
   struct LegSetpoint
   {
-    double length{.2};
-    bool jump{false};
+    double length{ .2 };
+    bool jump{ false };
     ros::Time received;
   };
   realtime_tools::RealtimeBuffer<LegSetpoint> leg_setpoint_buffer_;
   ros::Time last_leg_setpoint_;
-  double legCmd_{0.2};
-  bool jumpCmd_{false};
+  double legCmd_{ 0.2 };
+  bool jumpCmd_{ false };
 
   // ROS Interface
   ros::Subscriber leg_cmd_sub_, recovery_leg_spd_turnback_sub_;
@@ -159,8 +241,8 @@ private:
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedChassisStatus>> legged_chassis_status_pub_;
   std::shared_ptr<realtime_tools::RealtimePublisher<rm_msgs::LeggedLQRStatus>> lqr_status_pub_;
   ros::Time cmd_update_time_;
-  double last_status_time_{-1.};
-  uint64_t status_cycle_seq_{0}; // Per controller instance; deliberately retained across stop/start.
+  double last_status_time_{ -1. };
+  uint64_t status_cycle_seq_{ 0 };  // Per controller instance; deliberately retained across stop/start.
   ros::ServiceServer down_5cm_stair_srv_;
 };
-} // namespace rm_chassis_controllers
+}  // namespace rm_chassis_controllers

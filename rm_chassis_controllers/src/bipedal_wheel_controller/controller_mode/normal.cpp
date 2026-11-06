@@ -1,46 +1,52 @@
 #include "bipedal_wheel_controller/controller_mode/normal.h"
 #include "bipedal_wheel_controller/controller.h"
+#include "bipedal_wheel_controller/core/ground_core.h"
 namespace rm_chassis_controllers
 {
-Normal::Normal(BipedalControllerInterface *c, const std::vector<hardware_interface::JointHandle *> &joints,
-               const std::vector<control_toolbox::Pid *> &legs, control_toolbox::Pid *yaw,
-               control_toolbox::Pid *theta_diff, control_toolbox::Pid *roll, control_toolbox::Pid *wheel_diff,
-               const std::vector<control_toolbox::Pid *> &thetas)
-    : ModeBase(c), thetas_(thetas), yaw_(yaw), theta_diff_(theta_diff), wheel_diff_(wheel_diff), joints_(joints),
-      legs_(legs), roll_(roll)
+Normal::Normal(BipedalControllerInterface* c, const std::vector<hardware_interface::JointHandle*>& joints,
+               const std::vector<control_toolbox::Pid*>& legs, control_toolbox::Pid* yaw,
+               control_toolbox::Pid* theta_diff, control_toolbox::Pid* roll, control_toolbox::Pid* wheel_diff,
+               const std::vector<control_toolbox::Pid*>& thetas)
+  : ModeBase(c)
+  , thetas_(thetas)
+  , yaw_(yaw)
+  , theta_diff_(theta_diff)
+  , wheel_diff_(wheel_diff)
+  , joints_(joints)
+  , legs_(legs)
+  , roll_(roll)
 {
 }
-void Normal::execute(const ros::Time &time, const ros::Duration &period)
+void Normal::execute(const ros::Time& time, const ros::Duration& period)
 {
-  auto &feedback = controller->getNormalFeedback();
-  const auto &chassis = controller->getChassisState();
-  auto &left = controller->getLegState(LEFT);
-  auto &right = controller->getLegState(RIGHT);
-  const auto &lp = left.vmc->getPos();
-  const auto &rp = right.vmc->getPos();
+  auto& feedback = controller->getNormalFeedback();
+  const auto& chassis = controller->getChassisState();
+  auto& left = controller->getLegState(LEFT);
+  auto& right = controller->getLegState(RIGHT);
+  const auto& lp = left.vmc->getPos();
+  const auto& rp = right.vmc->getPos();
   if (!controller->getStateChange())
   {
     jump_phase_ = IDLE;
     jump_dwell_ = 0.;
     length_reference_.reset((lp.L0 + rp.L0) / 2.);
     roll_->reset();
-    for (auto *pid : legs_)
+    for (auto* pid : legs_)
       pid->reset();
     feedback.active = false;
     feedback.reference_valid = false;
     controller->setStateChange(true);
-    ROS_INFO("[balance] Enter NORMAL with ten-state feedback");
+    ROS_INFO("[balance] Enter NORMAL with base-task ten-state feedback");
   }
-  const auto &action = controller->getActionParams();
+  const auto& action = controller->getActionParams();
   if (controller->getOverturn())
   {
     requestMode(RECOVER);
     return;
   }
-  if (controller->getDown5cmStairFlag() &&
-      (std::abs(chassis.x[BODY_PITCH]) > action.down5cmStairPitchThreshold ||
-       std::abs(chassis.x[THETA_L]) > action.down5cmStairThetaThreshold ||
-       std::abs(chassis.x[THETA_R]) > action.down5cmStairThetaThreshold))
+  if (controller->getDown5cmStairFlag() && (std::abs(chassis.x[BODY_PITCH]) > action.down5cmStairPitchThreshold ||
+                                            std::abs(chassis.x[THETA_L]) > action.down5cmStairThetaThreshold ||
+                                            std::abs(chassis.x[THETA_R]) > action.down5cmStairThetaThreshold))
   {
     controller->setDown5cmStairFlag(false);
     requestMode(SIT_DOWN);
@@ -61,9 +67,9 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   }
   const auto command = controller->getVelCmd();
   // Original automatic stair trigger, evaluated before ground-LQR feedback.
-  if (controller->getCompleteStand() &&
-      std::abs((chassis.x[THETA_L] + chassis.x[THETA_R]) / 2.) > .50 && std::abs(command.x) > .1 &&
-      std::abs(chassis.x[V]) > .1 && (lp.L0 + rp.L0) / 2. > .30 && controller->getLegCmd() > .30)
+  if (controller->getCompleteStand() && std::abs((chassis.x[THETA_L] + chassis.x[THETA_R]) / 2.) > .50 &&
+      std::abs(command.x) > .1 && std::abs(chassis.x[V]) > .1 && (lp.L0 + rp.L0) / 2. > .30 &&
+      controller->getLegCmd() > .30)
   {
     controller->pubLegLenStatus(false);
     requestMode(UPSTAIRS);
@@ -79,7 +85,7 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
   }
   const bool complete_stand = controller->getCompleteStand();
   const double requested_length = complete_stand ? controller->getLegCmd() : controller->getDefaultLegLength();
-  auto *bipedal_controller = static_cast<BipedalController *>(controller);
+  auto* bipedal_controller = static_cast<BipedalController*>(controller);
   // Keep the original action-stage posture routing, independent of model trim checks.
   if (std::abs(chassis.x[THETA_L]) > 1.0)
   {
@@ -125,49 +131,16 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     }
   }
   bipedal_controller->updateGroundVelocity();
-  const double circle = chassis.x[V] * chassis.x[YAW_RATE];
-  const double alpha = std::abs(circle) > 10. ? 10. / std::abs(circle) : 1.;
-  const double velocity_reference = complete_stand ? alpha * command.x : 0.;
-  computeFeedback(velocity_reference, alpha * command.z);
-  // Second-order length shaping is inactive; retain the former path for reference.
-  // if (complete_stand)
-  //   length_reference_.update(requested_length, chassis.dt, config.length_reference_tau);
-  // else
-  //   length_reference_.reset(requested_length);
-  // Pass the effective target to the existing PID on this cycle.
-  // This resets only the unused length generator.
-  length_reference_.reset(requested_length);
-  const double current_length = (lp.L0 + rp.L0) / 2.;
-  const double roll_force = roll_->computeCommand(-chassis.roll, -chassis.roll_rate, period);
-  const auto &model = controller->getModelParams();
-  const double track = controller->getChassisGeometryParams()->wheel_track;
-  auto &force = feedback.axial_force;
-  for (int side = 0; side < 2; ++side)
-  {
-    const auto &pos = side == LEFT ? lp : rp;
-    // Differentiate the measured mean leg length, not a discrete setpoint
-    // change. This keeps the existing P/I/D gains while avoiding a derivative
-    // kick when complete_stand opens the .20 m command.
-    const double length_error = length_reference_.position - current_length;
-    const double length_error_dot = -chassis.dlength.mean();
-    double pid = legs_[side]->computeCommand(length_error, length_error_dot, period);
-    clamp(pid, -150., 150.);
-    const double turning = model->M * circle * pos.L0 / track;
-    const double turning_force = side == LEFT ? -turning : turning;
-    const double gravity_force = model->f_gravity / std::cos(pos.theta);
-    const double roll_component = side == LEFT ? roll_force : -roll_force;
-    const double spring_force = -controller->f_spring_force(pos.L0);
-    force[side] = pid + turning_force + gravity_force + roll_component + spring_force;
-  }
-  auto map = [&](const Input4 &input) {
-    double lt[2], rt[2];
-    left.vmc->leg_conv(force[0], input[2], lt);
-    right.vmc->leg_conv(force[1], input[3], rt);
-    Joint6 out;
-    out << lt[0], lt[1], rt[0], rt[1], input[0], input[1];
-    return out;
-  };
-  const auto commands = map(feedback.output);
+  GroundCommand ground_command;
+  ground_command.forward_velocity = command.x;
+  ground_command.yaw_rate = command.z;
+  ground_command.leg_length = requested_length;
+  ground_command.complete_stand = complete_stand;
+  const auto commands =
+      ground_core::computeGroundTorques(controller->getLqrConfig(), *controller->getModelParams(),
+                                        controller->getChassisGeometryParams()->wheel_track,
+                                        bipedal_controller->chassis_state_, bipedal_controller->leg_state_, feedback,
+                                        length_reference_, { { legs_[LEFT], legs_[RIGHT] } }, *roll_, ground_command);
   for (int i = 0; i < 6; ++i)
     joints_[i]->setCommand(commands[i]);
 }
@@ -179,7 +152,7 @@ void Normal::requestMode(int mode)
   bipedal_controller->integrateVelocity();
   if (mode == PROTECT || mode == SIT_DOWN)
     bipedal_controller->chassis_state_.x[S] = 0.;
-  auto &result = controller->getNormalFeedback();
+  auto& result = controller->getNormalFeedback();
   result.active = result.reference_valid = false;
   controller->setMode(mode);
   controller->setStateChange(false);
@@ -187,23 +160,23 @@ void Normal::requestMode(int mode)
   controller->setJumpCmd(false);
   jump_phase_ = IDLE;
   if (!joints_.empty())
-    setJointCommands(joints_, {0, 0, {0., 0.}}, {0, 0, {0., 0.}});
+    setJointCommands(joints_, { 0, 0, { 0., 0. } }, { 0, 0, { 0., 0. } });
 }
-void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
+void Normal::executeJump(const ros::Time& time, const ros::Duration& period)
 {
-  static_cast<BipedalController *>(controller)->integrateVelocity();
-  const auto &action = controller->getActionParams();
-  const auto &body = controller->getChassisState();
-  auto &left = controller->getLegState(LEFT);
-  auto &right = controller->getLegState(RIGHT);
+  static_cast<BipedalController*>(controller)->integrateVelocity();
+  const auto& action = controller->getActionParams();
+  const auto& body = controller->getChassisState();
+  auto& left = controller->getLegState(LEFT);
+  auto& right = controller->getLegState(RIGHT);
   const double length = (left.vmc->getPos().L0 + right.vmc->getPos().L0) / 2.;
   const double gravity = controller->getModelParams()->f_gravity;
   const double roll_force = roll_->computeCommand(-body.roll, -body.roll_rate, period);
   LegCommand commands[2]{};
   for (int side = 0; side < 2; ++side)
   {
-    auto &leg = side == 0 ? left : right;
-    const auto &pos = leg.vmc->getPos();
+    auto& leg = side == 0 ? left : right;
+    const auto& pos = leg.vmc->getPos();
     const double x = (pos.L0 - .12) / (.35 - .11);
     const double shape = 1. - 3. * x * x + 2. * x * x * x;
     double force = 0.;
@@ -243,39 +216,11 @@ void Normal::executeJump(const ros::Time &time, const ros::Duration &period)
       controller->setJumpCmd(false);
       controller->setStateChange(false);
       controller->setCompleteStand(false);
-      auto &result = controller->getNormalFeedback();
+      auto& result = controller->getNormalFeedback();
       result.reference_valid = false;
       ROS_INFO("[balance] Jump end; re-enter Normal ten-state feedback");
     }
   }
 }
 
-void Normal::computeFeedback(double velocity, double yaw_rate)
-{
-  auto &feedback = controller->getNormalFeedback();
-  const auto &chassis = controller->getChassisState();
-  const auto &config = controller->getLqrConfig();
-  Gain10 gain;
-  Input4 feedforward;
-  State10 equilibrium;
-  evaluate(config, chassis.length, gain, feedforward, &equilibrium);
-  auto *bipedal_controller = static_cast<BipedalController *>(controller);
-  if (!feedback.reference_valid)
-  {
-    feedback.reference.setZero();
-    bipedal_controller->chassis_state_.x[S] = 0.;
-    feedback.reference[YAW] = chassis.x[YAW];
-    feedback.reference_valid = true;
-  }
-  // Absolute physical angles remain in the observation. Only the commanded static
-  // equilibrium is scheduled; S is cleared and yaw reference initialized on Normal entry.
-  for (int i : {THETA_L, THETA_R, BODY_PITCH})
-    feedback.reference[i] = equilibrium[i];
-  feedback.reference[V] = velocity;
-  feedback.reference[YAW_RATE] = yaw_rate;
-  feedback.reference[YAW] += yaw_rate * chassis.dt;
-  feedback.output = feedforward - gain * (chassis.x - feedback.reference);
-  feedback.active = true;
-}
-
-} // namespace rm_chassis_controllers
+}  // namespace rm_chassis_controllers

@@ -28,12 +28,15 @@ void VelocityKalmanFilter::update(const Input& input, Output& output)
   const Eigen::Vector3d acceleration =
       input.rotation_world_base * input.specific_force_base + Eigen::Vector3d(0., 0., -9.81);
   const double point_forward = forward.dot(point_velocity), point_lateral = lateral.dot(point_velocity);
+  const double base_point = forward.dot(input.rotation_world_base *
+                                       input.angular_velocity_base.cross(input.imu_position_base));
 
-  const double turning_acceleration = input.yaw_rate * point_lateral;
+  const double turning_acceleration = input.yaw_rate * (point_lateral + input.wheel_lateral_velocity);
   const Eigen::Vector2d raw(input.kinematic_velocity + point_forward, forward.dot(acceleration) + turning_acceleration);
 
   Eigen::Vector2d observation = raw;
   double point_filtered = point_forward;
+  double base_point_filtered = base_point;
   if (initialized_)
   {
     const double beta_v = -std::expm1(-input.dt / params_.velocity_filter_tau);
@@ -41,6 +44,7 @@ void VelocityKalmanFilter::update(const Input& input, Output& output)
     observation[0] = observation_[0] + beta_v * (raw[0] - observation_[0]);
     observation[1] = observation_[1] + beta_a * (raw[1] - observation_[1]);
     point_filtered = point_velocity_filtered_ + beta_v * (point_forward - point_velocity_filtered_);
+    base_point_filtered = base_point_velocity_filtered_ + beta_v * (base_point - base_point_velocity_filtered_);
   }
   Eigen::Matrix2d measurement_covariance = Eigen::Matrix2d::Zero();
   measurement_covariance.diagonal() << std::pow(params_.velocity_stddev, 2), std::pow(params_.acceleration_stddev, 2);
@@ -71,10 +75,12 @@ void VelocityKalmanFilter::update(const Input& input, Output& output)
   const double velocity = state[0] - point_filtered;
 
   output.velocity = velocity;
+  output.base_velocity = state[0] - base_point_filtered;
   state_ = state;
   covariance_ = covariance;
   observation_ = observation;
   point_velocity_filtered_ = point_filtered;
+  base_point_velocity_filtered_ = base_point_filtered;
   initialized_ = true;
 }
 }  // namespace rm_chassis_controllers

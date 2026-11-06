@@ -28,11 +28,13 @@ public:
     Eigen::Vector3d imu_position_base;
     Eigen::Vector3d wheel_midpoint_base, wheel_midpoint_rate_base;
     double kinematic_velocity, dt;
+    double wheel_lateral_velocity{ 0. };
   };
 
   struct Output
   {
-    double velocity; 
+    double velocity;
+    double base_velocity;
   };
 
   void configure(const Params& params);
@@ -44,6 +46,7 @@ private:
   bool initialized_{ false };
   Eigen::Vector2d state_{ Eigen::Vector2d::Zero() }, observation_{ Eigen::Vector2d::Zero() };
   double point_velocity_filtered_{ 0. };
+  double base_point_velocity_filtered_{ 0. };
   Eigen::Matrix2d covariance_{ Eigen::Matrix2d::Zero() };
 };
 }  // namespace rm_chassis_controllers

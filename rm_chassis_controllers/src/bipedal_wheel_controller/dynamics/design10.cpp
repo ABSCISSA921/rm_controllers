@@ -25,9 +25,17 @@ static State10 basis(const Eigen::Vector2d& l, const Eigen::Matrix2d& domain)
 
 Gain10 solveCare(const LinearModel& m, const State10& q, const Input4& r, DesignReport& report)
 {
-  if ((q.array() < 0.).any() || (r.array() <= 0.).any())
-    throw std::invalid_argument("Q10 must be positive semidefinite and R4 positive definite");
-  const Eigen::MatrixXd q_matrix = q.asDiagonal(), r_inverse = r.cwiseInverse().asDiagonal();
+  return solveCareFull(m, q.asDiagonal(), r, report);
+}
+
+Gain10 solveCareFull(const LinearModel& m, const StateCost10& q, const Input4& r, DesignReport& report)
+{
+  if (!q.allFinite() || !r.allFinite() || !q.isApprox(q.transpose(), 1e-12) || (r.array() <= 0.).any())
+    throw std::invalid_argument("Q10 must be finite symmetric and R4 positive definite");
+  const Eigen::SelfAdjointEigenSolver<StateCost10> q_eigen(q);
+  if (q_eigen.info() != Eigen::Success || q_eigen.eigenvalues().minCoeff() < -1e-10 * std::max(1., q.norm()))
+    throw std::invalid_argument("Q10 must be positive semidefinite");
+  const Eigen::MatrixXd q_matrix = q, r_inverse = r.cwiseInverse().asDiagonal();
   Eigen::MatrixXd hamiltonian = Eigen::MatrixXd::Zero(20, 20);
   hamiltonian.topLeftCorner(10, 10) = m.A;
   hamiltonian.topRightCorner(10, 10) = -m.B * r_inverse * m.B.transpose();
@@ -67,7 +75,9 @@ Gain10 solveCare(const LinearModel& m, const State10& q, const Input4& r, Design
   return gain;
 }
 
-GainUpdate designTable(const Config& config, const State10& q, const Input4& r, DesignReport& report)
+template <typename CostFunction>
+GainUpdate designTableWithCost(const Config& config, const State10& weights, const Input4& r, DesignReport& report,
+                               const CostFunction& cost)
 {
   Eigen::MatrixXd rows(144, 10), ks(144, 40);
   const auto& d = config.domain;
@@ -77,7 +87,7 @@ GainUpdate designTable(const Config& config, const State10& q, const Input4& r, 
       const Eigen::Vector2d l(d(0, 0) + (d(0, 1) - d(0, 0)) * i / 11., d(1, 0) + (d(1, 1) - d(1, 0)) * j / 11.);
       const auto m = linearModel(config.model, l);
       report.equilibrium_error = std::max(report.equilibrium_error, m.residual.cwiseAbs().maxCoeff());
-      const auto k = solveCare(m, q, r, report);
+      const auto k = solveCareFull(m, cost(l, m.equilibrium), r, report);
       const int row = 12 * i + j;
       rows.row(row) = basis(l, d).transpose();
       for (int state = 0; state < 10; ++state)
@@ -88,7 +98,7 @@ GainUpdate designTable(const Config& config, const State10& q, const Input4& r, 
   const auto qr = rows.colPivHouseholderQr();
   GainUpdate update;
   update.coeffs = qr.solve(ks);
-  update.q = q;
+  update.q = weights;
   update.r = r;
   report.fit_error = (rows * update.coeffs - ks).cwiseAbs().maxCoeff();
   Config fit = config;
@@ -112,5 +122,24 @@ GainUpdate designTable(const Config& config, const State10& q, const Input4& r, 
       validate_point({ d(0, 0) + (d(0, 1) - d(0, 0)) * i / 14., d(1, 0) + (d(1, 1) - d(1, 0)) * j / 14. });
 
   return update;
+}
+
+GainUpdate designTable(const Config& config, const State10& q, const Input4& r, DesignReport& report)
+{
+  if ((q.array() < 0.).any())
+    throw std::invalid_argument("Q10 must be positive semidefinite");
+  return designTableWithCost(config, q, r, report,
+                             [&](const Eigen::Vector2d&, const State10&) -> StateCost10 { return q.asDiagonal(); });
+}
+
+GainUpdate designBaseTaskTable(const Config& config, const State10& output_weights, const State10& internal_weights,
+                               const Input4& r, const Eigen::Vector3d& hip_midpoint_base, DesignReport& report)
+{
+  if ((output_weights.array() < 0.).any() || (internal_weights.array() < 0.).any())
+    throw std::invalid_argument("Base task and internal weights must be nonnegative");
+  return designTableWithCost(config, output_weights, r, report,
+                             [&](const Eigen::Vector2d& lengths, const State10& trim) {
+                               return baseTaskCost(lengths, trim, hip_midpoint_base, output_weights, internal_weights);
+                             });
 }
 }  // namespace rm_chassis_controllers

@@ -1,5 +1,6 @@
 #pragma once
 #include "bipedal_wheel_controller/definitions.h"
+#include "bipedal_wheel_controller/base_task.h"
 
 namespace rm_chassis_controllers
 {
@@ -21,8 +22,12 @@ Input4 staticFeedforward(const PhysicalModel& p);
 State10 staticEquilibrium(const PhysicalModel& p, const Eigen::Vector2d& lengths, const Input4& uff);
 LinearModel linearModel(const PhysicalModel& p, const Eigen::Vector2d& lengths);
 Gain10 solveCare(const LinearModel& m, const State10& q, const Input4& r, DesignReport& report);
+Gain10 solveCareFull(const LinearModel& m, const StateCost10& q, const Input4& r, DesignReport& report);
 GainUpdate designTable(const Config& config, const State10& q, const Input4& r, DesignReport& report);
-// Runtime evaluation uses the supplied lengths directly, without domain or finite-value rejection.
+GainUpdate designBaseTaskTable(const Config& config, const State10& output_weights, const State10& internal_weights,
+                               const Input4& r, const Eigen::Vector3d& hip_midpoint_base, DesignReport& report);
+// Runtime trim and gain evaluation use the measured lengths directly.
+State10 evaluateEquilibrium(const Config& config, const Eigen::Vector2d& lengths);
 void evaluate(const Config& config, const Eigen::Vector2d& lengths, Gain10& gain, Input4& uff,
               State10* equilibrium = nullptr);
 }  // namespace rm_chassis_controllers

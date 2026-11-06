@@ -25,7 +25,6 @@ double chebyshev(const Curve6& coefficients, double t)
   return t * b1 - b2 + coefficients[0];
 }
 
-
 std::array<Leg, 2> physicalLegs(const PhysicalModel& p, const Eigen::Vector2d& lengths)
 {
   std::array<Leg, 2> legs;
@@ -35,7 +34,7 @@ std::array<Leg, 2> physicalLegs(const PhysicalModel& p, const Eigen::Vector2d& l
     const double t = 2. * (length - p.geometry_domain[0]) / (p.geometry_domain[1] - p.geometry_domain[0]) - 1.;
     const auto& a = p.legs[i];
     auto& z = legs[i];
-    z.l = length; 
+    z.l = length;
     z.offset = chebyshev(a.offset, t);
     z.lb = chebyshev(a.lb, t);
     z.lw = chebyshev(a.lw, t);
@@ -189,6 +188,11 @@ LinearModel linearModel(const PhysicalModel& p, const Eigen::Vector2d& lengths)
   return model;
 }
 
+State10 evaluateEquilibrium(const Config& config, const Eigen::Vector2d& lengths)
+{
+  return equilibriumFromLegs(config.model, physicalLegs(config.model, lengths), config.uff);
+}
+
 void evaluate(const Config& config, const Eigen::Vector2d& lengths, Gain10& gain, Input4& uff, State10* equilibrium)
 {
   const State10 b = poly33Basis(lengths, config.domain);
@@ -196,7 +200,7 @@ void evaluate(const Config& config, const Eigen::Vector2d& lengths, Gain10& gain
     for (int input = 0; input < 4; ++input)
       gain(input, state) = b.dot(config.coeffs.col(input + 4 * state));
   if (equilibrium)
-    *equilibrium = equilibriumFromLegs(config.model, physicalLegs(config.model, lengths), config.uff);
+    *equilibrium = evaluateEquilibrium(config, lengths);
   uff = config.uff;
 }
 }  // namespace rm_chassis_controllers
