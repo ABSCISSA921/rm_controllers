@@ -17,7 +17,6 @@ struct DesignReport
   double fit_error{ 0. }, equilibrium_error{ 0. };
   unsigned nodes{ 0 }, validation_points{ 0 };
 };
-PhysicalLeg makePhysicalLeg(double mass);
 Input4 staticFeedforward(const PhysicalModel& p);
 State10 staticEquilibrium(const PhysicalModel& p, const Eigen::Vector2d& lengths, const Input4& uff);
 LinearModel linearModel(const PhysicalModel& p, const Eigen::Vector2d& lengths);

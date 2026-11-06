@@ -629,7 +629,7 @@ void BipedalController::setupVelocityEstimator(ros::NodeHandle &controller_nh)
 bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, Config &config)
 {
   auto &model = config.model;
-  double leg_mass{};
+  PhysicalLeg common_leg;
   const std::pair<const char *, double *> parameters[] = {
       {"lqr_model/gravity", &model.g},
       {"lqr_model/yaw_inertia", &model.Izz},
@@ -639,7 +639,7 @@ bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, Config &co
       {"lqr_model/body/com_angle", &model.phi_c},
       {"lqr_model/wheel/mass", &model.mw},
       {"lqr_model/wheel/spin_inertia", &model.Iw},
-      {"lqr_model/leg/mass", &leg_mass},
+      {"lqr_model/leg/mass", &common_leg.mass},
       {"normal_reference/length_tau", &config.length_reference_tau}};
   for (const auto &entry : parameters)
     if (!controller_nh.getParam(entry.first, *entry.second))
@@ -647,6 +647,15 @@ bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, Config &co
       ROS_ERROR("Param %s not given (namespace: %s)", entry.first, controller_nh.getNamespace().c_str());
       return false;
     }
+
+  const std::pair<const char *, Curve6 *> curves[] = {
+      {"lqr_model/leg/angle_offset_coefficients", &common_leg.offset},
+      {"lqr_model/leg/lb_coefficients", &common_leg.lb},
+      {"lqr_model/leg/lw_coefficients", &common_leg.lw},
+      {"lqr_model/leg/inertia_coefficients", &common_leg.inertia}};
+  for (const auto &entry : curves)
+    if (!getVectorParam(controller_nh, entry.first, *entry.second))
+      return false;
 
   Eigen::Vector2d length_domain;
   if (!getVectorParam(controller_nh, "q", config.q) || !getVectorParam(controller_nh, "r", config.r) ||
@@ -657,7 +666,8 @@ bool BipedalController::loadLqrParams(ros::NodeHandle &controller_nh, Config &co
   model.Rw = wheel_radius_;
   model.Rl = 0.5 * chassis_geometry_params_->wheel_track;
   model.geometry_domain = length_domain;
-  model.legs.fill(makePhysicalLeg(leg_mass));
+  model.legs[0] = common_leg;
+  model.legs[1] = common_leg;
   config.uff = staticFeedforward(model);
   config.wheel_radius = wheel_radius_;
   return true;

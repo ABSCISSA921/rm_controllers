@@ -74,26 +74,12 @@ include_directories(
         ${EIGEN3_INCLUDE_DIR}
 )
 
-set(BIPEDAL_SOURCES
-        src/bipedal_wheel_controller/estimation/velocity_kf.cpp
-        src/bipedal_wheel_controller/dynamics/model10.cpp
-        src/bipedal_wheel_controller/dynamics/design10.cpp
-        src/bipedal_wheel_controller/controller.cpp
-        src/bipedal_wheel_controller/controller_mode/mode_base.cpp
-        src/bipedal_wheel_controller/controller_mode/mode_manager.cpp
-        src/bipedal_wheel_controller/controller_mode/normal.cpp
-        src/bipedal_wheel_controller/controller_mode/recover.cpp
-        src/bipedal_wheel_controller/controller_mode/protect.cpp
-        src/bipedal_wheel_controller/controller_mode/upstairs.cpp
-        src/bipedal_wheel_controller/controller_mode/sit_down.cpp
-        src/bipedal_wheel_controller/controller_mode/stand_up.cpp
-        src/bipedal_wheel_controller/series_legged_vmc_controller.cpp
-        src/bipedal_wheel_controller/vmc/VMC.cpp
-        src/bipedal_wheel_controller/vmc/leg_conv.c
-        src/bipedal_wheel_controller/vmc/leg_conv_t.c
-        src/bipedal_wheel_controller/vmc/leg_pos.c
-        src/bipedal_wheel_controller/vmc/leg_spd.c
+
+file(GLOB_RECURSE BIPEDAL_SOURCES
+        "src/bipedal_wheel_controller/*.cpp"
+        "src/bipedal_wheel_controller/*.c"
 )
+
 
 ## Declare cpp executables
 add_library(${PROJECT_NAME}

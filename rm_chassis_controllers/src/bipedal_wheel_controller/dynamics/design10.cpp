@@ -7,17 +7,6 @@
 
 namespace rm_chassis_controllers
 {
-PhysicalLeg makePhysicalLeg(double mass)
-{
-  PhysicalLeg leg;
-  leg.mass = mass;
-  leg.offset << 0.00781088, -0.00731481, 0.00274022, -0.00087926, 0.00038916, -0.00007942;
-  leg.lb << 0.08640568, 0.05103905, 0.01026298, -0.00690686, 0.00350066, -0.00201761;
-  leg.lw << 0.17428161, 0.07786379, 0.00902815, -0.00340298, 0.00133048, -0.00048186;
-  leg.inertia << 0.01540610, -0.00059323, -0.00094531, 0.00026475, -0.00020695, 0.00004118;
-  return leg;
-}
-
 static double maxReal(const Eigen::MatrixXd& a)
 {
   Eigen::EigenSolver<Eigen::MatrixXd> e(a, false);
