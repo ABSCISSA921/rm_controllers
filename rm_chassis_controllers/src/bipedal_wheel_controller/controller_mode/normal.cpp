@@ -125,8 +125,12 @@ void Normal::execute(const ros::Time &time, const ros::Duration &period)
     }
   }
   bipedal_controller->updateGroundVelocity();
+  // Lower this lateral acceleration threshold to slow down earlier in turns (m/s^2).
+  constexpr double turning_acceleration_threshold = 9.0;
   const double circle = chassis.x[V] * chassis.x[YAW_RATE];
-  const double alpha = std::abs(circle) > 10. ? 10. / std::abs(circle) : 1.;
+  // Scale both references equally to preserve the commanded turn radius.
+  const double alpha =
+      std::abs(circle) > turning_acceleration_threshold ? turning_acceleration_threshold / std::abs(circle) : 1.;
   const double velocity_reference = complete_stand ? alpha * command.x : 0.;
   computeFeedback(velocity_reference, alpha * command.z);
   // Second-order length shaping is inactive; retain the former path for reference.
